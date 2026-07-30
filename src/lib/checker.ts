@@ -39,8 +39,6 @@ declare global {
         running: boolean;
         lastStartedAt: number | null;
         nextCheckAt: number | null;
-        pendingAll: boolean;
-        pendingServiceIds: string[] | null;
       }
     | undefined;
 }
@@ -52,8 +50,6 @@ function monitorState() {
       running: false,
       lastStartedAt: null,
       nextCheckAt: null,
-      pendingAll: false,
-      pendingServiceIds: null,
     };
   }
   return globalThis.__spiritMonitor;
@@ -146,18 +142,21 @@ export async function checkService(service: Service): Promise<CheckResult> {
   return last!;
 }
 
-export async function runChecks(serviceIds?: string[]) {
+let checkChain: Promise<void> = Promise.resolve();
+
+export function runChecks(serviceIds?: string[]) {
+  const job = () => executeChecks(serviceIds);
+  const result = checkChain.then(job, job);
+  checkChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+async function executeChecks(serviceIds?: string[]) {
   const state = monitorState();
-  if (state.running) {
-    if (serviceIds?.length) {
-      const pending = new Set(state.pendingServiceIds ?? []);
-      for (const id of serviceIds) pending.add(id);
-      state.pendingServiceIds = [...pending];
-    } else {
-      state.pendingAll = true;
-    }
-    return { ran: false, checked: 0 };
-  }
+  const partial = Boolean(serviceIds?.length);
   state.running = true;
   state.lastStartedAt = Date.now();
 
@@ -177,21 +176,15 @@ export async function runChecks(serviceIds?: string[]) {
     );
 
     if (results.length) {
-      await recordCheckResults(results);
+      await recordCheckResults(results, { touchLastCheck: !partial });
     }
 
     return { ran: true, checked: results.length };
   } finally {
     state.running = false;
-    state.nextCheckAt = Date.now() + CHECK_INTERVAL_MS;
-    const pendingAll = state.pendingAll;
-    const pendingIds = state.pendingServiceIds;
-    state.pendingAll = false;
-    state.pendingServiceIds = null;
-    if (pendingAll) {
-      void runChecks();
-    } else if (pendingIds?.length) {
-      void runChecks(pendingIds);
+    // Only full monitor cycles own the public countdown.
+    if (!partial) {
+      state.nextCheckAt = Date.now() + CHECK_INTERVAL_MS;
     }
   }
 }

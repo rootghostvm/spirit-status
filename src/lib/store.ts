@@ -552,6 +552,7 @@ function syncIncidents(
 
 export async function recordCheckResults(
   results: Array<{ serviceId: string; result: CheckResult }>,
+  options?: { touchLastCheck?: boolean },
 ) {
   await updateStore((store) => {
     const checkedAt = new Date().toISOString();
@@ -591,7 +592,9 @@ export async function recordCheckResults(
         }
       }
     }
-    store.lastCheckAt = checkedAt;
+    if (options?.touchLastCheck !== false) {
+      store.lastCheckAt = checkedAt;
+    }
   });
 }
 
@@ -715,6 +718,16 @@ export async function resolveIncident(id: string, message?: string) {
     status: "resolved",
     message: message?.trim() || "Incident resolved",
   });
+}
+
+export async function deleteIncident(id: string) {
+  let removed = false;
+  await updateStore((store) => {
+    const before = store.incidents.length;
+    store.incidents = store.incidents.filter((i) => i.id !== id);
+    removed = store.incidents.length < before;
+  });
+  return removed;
 }
 
 export async function setAnnouncement(

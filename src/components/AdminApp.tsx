@@ -416,8 +416,8 @@ export function AdminApp() {
     setBusy(true);
     setIncidentUpdateError(null);
     try {
-      const res = await fetch(`/api/admin/incidents/${incidentId}/updates`, {
-        method: "POST",
+      const res = await fetch(`/api/admin/incidents/${incidentId}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: incidentUpdateForm.message,
@@ -441,8 +441,10 @@ export function AdminApp() {
   async function resolveIncident(incident: Incident) {
     setBusy(true);
     try {
-      const res = await fetch(`/api/admin/incidents/${incident.id}/resolve`, {
-        method: "POST",
+      const res = await fetch(`/api/admin/incidents/${incident.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolve: true }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -451,6 +453,27 @@ export function AdminApp() {
       }
       await loadServices();
       showToast("Incident resolved");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeIncident(incident: Incident) {
+    if (!window.confirm(`Delete incident for "${incident.serviceName}"?`)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/incidents/${incident.id}`, {
+        method: "DELETE",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(json.error ?? "Could not delete incident");
+        return;
+      }
+      await loadServices();
+      showToast("Incident deleted");
     } finally {
       setBusy(false);
     }
@@ -1366,8 +1389,27 @@ export function AdminApp() {
                                   >
                                     Resolve
                                   </button>
+                                  <button
+                                    type="button"
+                                    className="danger-btn"
+                                    onClick={() => removeIncident(incident)}
+                                    disabled={busy}
+                                  >
+                                    Delete
+                                  </button>
                                 </div>
-                              ) : null}
+                              ) : (
+                                <div className="entity-actions">
+                                  <button
+                                    type="button"
+                                    className="danger-btn"
+                                    onClick={() => removeIncident(incident)}
+                                    disabled={busy}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
                               {addingUpdate ? (
                                 <form
                                   className="incident-update-form"

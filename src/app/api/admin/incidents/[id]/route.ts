@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { addIncidentUpdate, resolveIncident } from "@/lib/store";
+import {
+  addIncidentUpdate,
+  deleteIncident,
+  resolveIncident,
+} from "@/lib/store";
 import type { IncidentUpdateStatus } from "@/lib/types";
 
 type Params = { params: Promise<{ id: string }> };
@@ -46,4 +50,17 @@ export async function PATCH(request: Request, { params }: Params) {
   }
 
   return NextResponse.json({ incident });
+}
+
+export async function DELETE(_request: Request, { params }: Params) {
+  if (!(await requireAdmin())) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { id } = await params;
+  const removed = await deleteIncident(id);
+  if (!removed) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  return NextResponse.json({ ok: true });
 }

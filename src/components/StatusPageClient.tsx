@@ -19,7 +19,7 @@ export function StatusPageClient({
   const [mounted, setMounted] = useState(false);
   const fetching = useRef(false);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { syncTick?: boolean }) => {
     if (fetching.current) return;
     fetching.current = true;
     try {
@@ -27,7 +27,15 @@ export function StatusPageClient({
       if (!res.ok) return;
       const json = (await res.json()) as PublicStatusPayload;
       setData(json);
-      setTick(json.nextCheckInMs);
+      setTick((current) => {
+        const server = json.nextCheckInMs;
+        // After a completed probe, server countdown resets near the full interval.
+        if (opts?.syncTick) return server;
+        // Smooth local countdown: only correct meaningful drift / earlier probes.
+        if (server < current - 1500) return server;
+        if (Math.abs(server - current) > 8_000) return server;
+        return current;
+      });
     } catch {
       // keep last known state
     } finally {
@@ -56,13 +64,13 @@ export function StatusPageClient({
     if (!mounted) return;
     const id = window.setInterval(() => {
       void refresh();
-    }, 5_000);
+    }, 3_000);
     return () => window.clearInterval(id);
   }, [mounted, refresh]);
 
   useEffect(() => {
     if (!mounted || tick > 0) return;
-    void refresh();
+    void refresh({ syncTick: true });
   }, [mounted, tick, refresh]);
 
   return (
@@ -94,7 +102,7 @@ export function StatusPageClient({
           <button
             type="button"
             className="text-btn"
-            onClick={() => void refresh()}
+            onClick={() => void refresh({ syncTick: true })}
           >
             Refresh
           </button>
