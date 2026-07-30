@@ -29,26 +29,9 @@ const DATA_DIR = process.env.DATA_DIR
 const STORE_PATH = path.join(DATA_DIR, "store.json");
 
 function defaultStore(): StoreData {
-  const now = new Date().toISOString();
-  const samples: Service[] = [
-    {
-      id: randomUUID(),
-      name: "Main Website",
-      url: "https://example.com",
-      description: "Primary public site",
-      group: "Websites",
-      sortOrder: 0,
-      enabled: true,
-      method: "GET",
-      expectedStatusCodes: [],
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-
   return {
     version: STORE_VERSION,
-    services: samples,
+    services: [],
     latest: {},
     history: {},
     daily: {},
@@ -78,6 +61,17 @@ function normalizeService(raw: Partial<Service>, index: number): Service {
   };
 }
 
+function normalizeDayBucket(raw: Partial<DayBucket>): DayBucket {
+  return {
+    date: raw.date || "",
+    operational: raw.operational ?? 0,
+    degraded: raw.degraded ?? 0,
+    down: raw.down ?? 0,
+    unknown: raw.unknown ?? 0,
+    maintenance: raw.maintenance ?? 0,
+  };
+}
+
 function normalizeStore(raw: Partial<StoreData> & Record<string, unknown>): StoreData {
   const services = Array.isArray(raw.services)
     ? raw.services.map((s, i) => normalizeService(s as Partial<Service>, i))
@@ -96,6 +90,13 @@ function normalizeStore(raw: Partial<StoreData> & Record<string, unknown>): Stor
       }
       daily[serviceId] = buckets;
     }
+  } else {
+    daily = Object.fromEntries(
+      Object.entries(daily).map(([id, buckets]) => [
+        id,
+        (buckets ?? []).map((b) => normalizeDayBucket(b)),
+      ]),
+    );
   }
 
   return {
@@ -413,7 +414,7 @@ export async function reorderServices(orderedIds: string[]) {
 
 function bumpDaily(
   daily: DayBucket[] | undefined,
-  status: CheckResult["status"],
+  status: CheckResult["status"] | "maintenance",
   when: string,
 ): DayBucket[] {
   const key = dateKey(new Date(when));
@@ -426,9 +427,11 @@ function bumpDaily(
       degraded: 0,
       down: 0,
       unknown: 0,
+      maintenance: 0,
     };
     list.push(bucket);
   }
+  if (bucket.maintenance == null) bucket.maintenance = 0;
   bucket[status] += 1;
   list.sort((a, b) => a.date.localeCompare(b.date));
   return list.slice(-DAILY_LIMIT);
@@ -509,14 +512,14 @@ export async function recordCheckResults(
       const history = store.history[serviceId] ?? [];
       history.push(result);
       store.history[serviceId] = history.slice(-HISTORY_LIMIT);
-      store.daily[serviceId] = bumpDaily(
-        store.daily[serviceId],
-        result.status,
-        result.checkedAt,
-      );
       const underMaintenance = isServiceUnderMaintenance(
         serviceId,
         store.maintenances,
+      );
+      store.daily[serviceId] = bumpDaily(
+        store.daily[serviceId],
+        underMaintenance ? "maintenance" : result.status,
+        result.checkedAt,
       );
       if (service && !underMaintenance) {
         syncIncidents(store, service, previous, result);

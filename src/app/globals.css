@@ -490,6 +490,10 @@ select {
   background: rgba(14, 28, 43, 0.08);
 }
 
+.uptime-bar.maintenance {
+  background: linear-gradient(180deg, #3aa7cb, #1f6f8b);
+}
+
 .uptime-tooltip {
   position: absolute;
   bottom: calc(100% + 10px);
@@ -561,6 +565,10 @@ select {
 
 .uptime-tooltip-dot.unknown {
   background: #7d8b9a;
+}
+
+.uptime-tooltip-dot.maintenance {
+  background: #3aa7cb;
 }
 
 .service-detail {

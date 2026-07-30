@@ -237,7 +237,14 @@ function toPublicService(
 ): PublicServiceView {
   const history = store.history[service.id];
   const daily = store.daily[service.id];
+  const underMaintenance =
+    service.enabled &&
+    isServiceUnderMaintenance(service.id, store.maintenances);
   const dayBars = buildDayBars(daily);
+  if (underMaintenance && dayBars.length) {
+    const today = dayBars[dayBars.length - 1];
+    dayBars[dayBars.length - 1] = { ...today, status: "maintenance" };
+  }
   const filled = dayBars.filter((b) => b.uptime != null);
   const uptime90d = filled.length
     ? Math.round(
@@ -246,9 +253,6 @@ function toPublicService(
       ) / 10
     : null;
 
-  const underMaintenance =
-    service.enabled &&
-    isServiceUnderMaintenance(service.id, store.maintenances);
   const latest = store.latest[service.id] ?? null;
   const displayStatus: ServiceHealth = !service.enabled
     ? "unknown"

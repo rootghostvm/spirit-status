@@ -41,6 +41,7 @@ export interface DayBucket {
   degraded: number;
   down: number;
   unknown: number;
+  maintenance: number;
 }
 
 export interface IncidentUpdate {

@@ -21,20 +21,31 @@ export function worseStatus(a: ServiceHealth, b: ServiceHealth): ServiceHealth {
 
 export function dayBucketStatus(bucket: DayBucket): ServiceHealth {
   const total =
-    bucket.operational + bucket.degraded + bucket.down + bucket.unknown;
+    bucket.operational +
+    bucket.degraded +
+    bucket.down +
+    bucket.unknown +
+    (bucket.maintenance ?? 0);
   if (!total) return "unknown";
   const downRatio = bucket.down / total;
   const degradedRatio = bucket.degraded / total;
+  const maintenanceRatio = (bucket.maintenance ?? 0) / total;
   if (downRatio >= 0.2) return "down";
-  if (degradedRatio >= 0.15 || downRatio > 0) return "degraded";
+  if (degradedRatio >= 0.15 || bucket.down > 0) return "degraded";
+  if (maintenanceRatio >= 0.15 || (bucket.maintenance ?? 0) > 0) {
+    return "maintenance";
+  }
   if (bucket.operational > 0) return "operational";
   return "unknown";
 }
 
 export function dayBucketUptime(bucket: DayBucket): number | null {
+  // Maintenance windows are excluded from uptime math.
   const total =
     bucket.operational + bucket.degraded + bucket.down + bucket.unknown;
-  if (!total) return null;
+  if (!total) {
+    return (bucket.maintenance ?? 0) > 0 ? 100 : null;
+  }
   return Math.round((bucket.operational / total) * 1000) / 10;
 }
 
