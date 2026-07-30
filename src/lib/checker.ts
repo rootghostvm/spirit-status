@@ -11,6 +11,7 @@ import {
   readStore,
   recordCheckResults,
   sparklineValues,
+  updateLastCheckAt,
   uptimePercent,
 } from "./store";
 import {
@@ -177,6 +178,9 @@ async function executeChecks(serviceIds?: string[]) {
 
     if (results.length) {
       await recordCheckResults(results, { touchLastCheck: !partial });
+    } else if (!partial) {
+      // Keep "last checked" honest even when nothing was probed.
+      await updateLastCheckAt(new Date().toISOString());
     }
 
     return { ran: true, checked: results.length };
@@ -328,6 +332,7 @@ function toPublicMaintenances(
 }
 
 export async function getPublicStatus(): Promise<PublicStatusPayload> {
+  startMonitor();
   const store = await readStore();
   const state = monitorState();
 
@@ -351,10 +356,41 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
     services: groupServices,
   }));
 
-  const nextCheckInMs = Math.max(
-    0,
-    (state.nextCheckAt ?? Date.now() + CHECK_INTERVAL_MS) - Date.now(),
-  );
+  // Prefer the freshest probe timestamp so "checked Xm ago" matches reality.
+  const probeTimes = [
+    store.lastCheckAt ? new Date(store.lastCheckAt).getTime() : 0,
+    ...Object.values(store.latest).map((c) => new Date(c.checkedAt).getTime()),
+  ].filter((t) => Number.isFinite(t) && t > 0);
+  const freshestProbe = probeTimes.length ? Math.max(...probeTimes) : null;
+  const lastCheckAt = freshestProbe
+    ? new Date(freshestProbe).toISOString()
+    : null;
+
+  const dueFromLast =
+    freshestProbe != null
+      ? freshestProbe + CHECK_INTERVAL_MS - Date.now()
+      : null;
+  const timerRemaining =
+    state.nextCheckAt != null ? state.nextCheckAt - Date.now() : null;
+
+  // If we're overdue based on last probe, kick a cycle and show 0.
+  if (dueFromLast != null && dueFromLast <= 0 && !state.running) {
+    void runChecks();
+  }
+
+  let nextCheckInMs: number;
+  if (dueFromLast != null && timerRemaining != null) {
+    nextCheckInMs = Math.max(0, Math.min(dueFromLast, timerRemaining));
+  } else {
+    nextCheckInMs = Math.max(
+      0,
+      dueFromLast ?? timerRemaining ?? CHECK_INTERVAL_MS,
+    );
+  }
+  // Never advertise a long wait when the last probe is already stale.
+  if (dueFromLast != null && dueFromLast <= 0) {
+    nextCheckInMs = 0;
+  }
 
   const { current: maintenances, history: maintenanceHistory } =
     toPublicMaintenances(store);
@@ -383,7 +419,7 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
     incidents: store.incidents.slice(0, 20),
     maintenances,
     maintenanceHistory,
-    lastCheckAt: store.lastCheckAt,
+    lastCheckAt,
     nextCheckInMs,
     checkIntervalMs: CHECK_INTERVAL_MS,
   };

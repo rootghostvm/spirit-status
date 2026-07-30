@@ -720,6 +720,12 @@ export async function resolveIncident(id: string, message?: string) {
   });
 }
 
+export async function updateLastCheckAt(iso: string) {
+  await updateStore((store) => {
+    store.lastCheckAt = iso;
+  });
+}
+
 export async function deleteIncident(id: string) {
   let removed = false;
   await updateStore((store) => {

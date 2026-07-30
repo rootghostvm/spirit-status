@@ -24,6 +24,8 @@ services:
         value: SpiritHost
       - key: NEXT_PUBLIC_STATUS_TITLE
         value: System Status
+      - key: NEXT_PUBLIC_SITE_URL
+        value: https://status.spirithost.co.uk
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID

@@ -22,7 +22,8 @@ export function RelativeTime({
 
     const tick = () => setText(formatRelative(iso));
     tick();
-    const id = window.setInterval(tick, 15_000);
+    // Tick every second while recent so "checked Xs ago" stays honest.
+    const id = window.setInterval(tick, 1_000);
     return () => window.clearInterval(id);
   }, [iso]);
 

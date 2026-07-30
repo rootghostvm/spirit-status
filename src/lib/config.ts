@@ -11,6 +11,9 @@ export const STORE_VERSION = 4;
 export const BRAND_NAME = process.env.NEXT_PUBLIC_BRAND_NAME ?? "SpiritHost";
 export const STATUS_TITLE =
   process.env.NEXT_PUBLIC_STATUS_TITLE ?? "System Status";
+export const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
+  "https://status.spirithost.co.uk";
 
 export function getAdminPassword() {
   const value = process.env.ADMIN_PASSWORD?.trim();
