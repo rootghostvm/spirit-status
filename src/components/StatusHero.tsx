@@ -2,8 +2,8 @@
 
 import { motion } from "framer-motion";
 import type { ServiceHealth } from "@/lib/types";
-import { formatRelative } from "@/lib/format";
 import { StatusDot, statusLabel } from "./StatusDot";
+import { RelativeTime } from "./RelativeTime";
 
 const headlines: Record<ServiceHealth, string> = {
   operational: "All systems operational",
@@ -95,9 +95,14 @@ export function StatusHero({
             <p className="overall-label">{headlines[overall]}</p>
             <p className="overall-meta">
               {statusLabel(overall)}
-              {lastCheckAt
-                ? ` · checked ${formatRelative(lastCheckAt)}`
-                : " · first check running"}
+              {lastCheckAt ? (
+                <>
+                  {" · checked "}
+                  <RelativeTime iso={lastCheckAt} />
+                </>
+              ) : (
+                " · first check running"
+              )}
             </p>
           </div>
         </motion.div>
@@ -115,7 +120,9 @@ export function StatusHero({
               transition={{ duration: 0.4, ease: "easeOut" }}
             />
           </div>
-          <span>Next probe in {Math.ceil(nextCheckInMs / 1000)}s</span>
+          <span suppressHydrationWarning>
+            Next probe in {Math.ceil(nextCheckInMs / 1000)}s
+          </span>
         </motion.div>
       </div>
     </header>

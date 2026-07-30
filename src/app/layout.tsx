@@ -17,6 +17,9 @@ const body = Manrope({
 export const metadata: Metadata = {
   title: "SpiritHost Status",
   description: "Live system status and uptime monitoring for SpiritHost.",
+  icons: {
+    icon: [{ url: "/favicon.ico", type: "image/x-icon" }],
+  },
   alternates: {
     types: {
       "application/rss+xml": "/api/feed",

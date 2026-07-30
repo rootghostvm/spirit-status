@@ -9,11 +9,12 @@ type DayBar = PublicServiceView["dayBars"][number];
 
 function formatBarDate(isoDate: string) {
   const d = new Date(`${isoDate}T12:00:00Z`);
-  return d.toLocaleDateString(undefined, {
+  return d.toLocaleDateString("en-GB", {
     weekday: "short",
     month: "short",
     day: "numeric",
     year: "numeric",
+    timeZone: "UTC",
   });
 }
 

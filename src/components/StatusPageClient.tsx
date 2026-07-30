@@ -16,6 +16,7 @@ export function StatusPageClient({
 }) {
   const [data, setData] = useState(initial);
   const [tick, setTick] = useState(initial.nextCheckInMs);
+  const [mounted, setMounted] = useState(false);
   const fetching = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -35,28 +36,34 @@ export function StatusPageClient({
   }, []);
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
     setData(initial);
     setTick(initial.nextCheckInMs);
   }, [initial]);
 
   useEffect(() => {
+    if (!mounted) return;
     const id = window.setInterval(() => {
       setTick((current) => Math.max(0, current - 1000));
     }, 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [mounted]);
 
   useEffect(() => {
+    if (!mounted) return;
     const id = window.setInterval(() => {
       void refresh();
     }, 12_000);
     return () => window.clearInterval(id);
-  }, [refresh]);
+  }, [mounted, refresh]);
 
   useEffect(() => {
-    if (tick > 0) return;
+    if (!mounted || tick > 0) return;
     void refresh();
-  }, [tick, refresh]);
+  }, [mounted, tick, refresh]);
 
   return (
     <div className="page-shell">
@@ -65,7 +72,7 @@ export function StatusPageClient({
         title={data.title}
         overall={data.overall}
         lastCheckAt={data.lastCheckAt}
-        nextCheckInMs={tick}
+        nextCheckInMs={mounted ? tick : initial.nextCheckInMs}
         checkIntervalMs={data.checkIntervalMs}
       />
 

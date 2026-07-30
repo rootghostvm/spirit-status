@@ -1,9 +1,10 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
+import { formatDuration } from "@/lib/format";
 import type { Incident } from "@/lib/types";
-import { formatDuration, formatRelative } from "@/lib/format";
 import { StatusDot, statusLabel } from "./StatusDot";
+import { RelativeTime } from "./RelativeTime";
 
 const updateLabels: Record<string, string> = {
   investigating: "Investigating",
@@ -12,6 +13,29 @@ const updateLabels: Record<string, string> = {
   resolved: "Resolved",
   update: "Update",
 };
+
+function LiveDuration({
+  startIso,
+  endIso,
+}: {
+  startIso: string;
+  endIso?: string | null;
+}) {
+  const [text, setText] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (endIso) {
+      setText(formatDuration(startIso, endIso));
+      return;
+    }
+    const tick = () => setText(formatDuration(startIso, null));
+    tick();
+    const id = window.setInterval(tick, 15_000);
+    return () => window.clearInterval(id);
+  }, [startIso, endIso]);
+
+  return <span suppressHydrationWarning>{text ?? "…"}</span>;
+}
 
 export function IncidentFeed({ incidents }: { incidents: Incident[] }) {
   const open = incidents.filter((i) => !i.resolvedAt);
@@ -28,14 +52,8 @@ export function IncidentFeed({ incidents }: { incidents: Incident[] }) {
       </div>
 
       <ul className="incident-list">
-        {shown.map((incident, index) => (
-          <motion.li
-            key={incident.id}
-            className="incident-row"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.04 * index }}
-          >
+        {shown.map((incident) => (
+          <li key={incident.id} className="incident-row">
             <StatusDot status={incident.status} />
             <div className="incident-body">
               <div className="incident-top">
@@ -50,8 +68,11 @@ export function IncidentFeed({ incidents }: { incidents: Incident[] }) {
               </div>
               <p className="incident-msg">{incident.message}</p>
               <p className="incident-meta">
-                Started {formatRelative(incident.startedAt)} · lasted{" "}
-                {formatDuration(incident.startedAt, incident.resolvedAt)}
+                Started <RelativeTime iso={incident.startedAt} /> · lasted{" "}
+                <LiveDuration
+                  startIso={incident.startedAt}
+                  endIso={incident.resolvedAt}
+                />
                 {incident.source === "manual" ? " · posted by admin" : ""}
               </p>
 
@@ -62,14 +83,14 @@ export function IncidentFeed({ incidents }: { incidents: Incident[] }) {
                       <strong>
                         {updateLabels[update.status] || "Update"}
                       </strong>
-                      <span>{formatRelative(update.at)}</span>
+                      <RelativeTime iso={update.at} />
                       <p>{update.message}</p>
                     </li>
                   ))}
                 </ol>
               ) : null}
             </div>
-          </motion.li>
+          </li>
         ))}
       </ul>
     </section>

@@ -101,6 +101,8 @@ export function formatWindow(startsAt: string, endsAt: string) {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
   };
-  return `${start.toLocaleString(undefined, opts)} → ${end.toLocaleString(undefined, opts)}`;
+  return `${start.toLocaleString("en-GB", opts)} → ${end.toLocaleString("en-GB", opts)} UTC`;
 }

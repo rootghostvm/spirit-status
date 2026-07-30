@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { PublicServiceView, PublicStatusPayload } from "@/lib/types";
-import { formatLatency, formatRelative } from "@/lib/format";
+import { formatLatency } from "@/lib/format";
 import { StatusDot, statusLabel } from "./StatusDot";
 import { UptimeBars } from "./UptimeBars";
+import { RelativeTime } from "./RelativeTime";
 
 export function ServiceList({
   groups,
@@ -126,7 +127,12 @@ function ServiceRow({
               />
               <Detail
                 label="Last check"
-                value={formatRelative(service.latest?.checkedAt)}
+                value={
+                  <RelativeTime
+                    iso={service.latest?.checkedAt}
+                    fallback="never"
+                  />
+                }
               />
               <Detail
                 label="Status code"
@@ -154,7 +160,13 @@ function ServiceRow({
   );
 }
 
-function Detail({ label, value }: { label: string; value: string }) {
+function Detail({
+  label,
+  value,
+}: {
+  label: string;
+  value: ReactNode;
+}) {
   return (
     <div>
       <p className="detail-label">{label}</p>
