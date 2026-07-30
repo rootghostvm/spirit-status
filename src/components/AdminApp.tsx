@@ -104,6 +104,25 @@ const emptyAnnouncementForm: AnnouncementFormState = {
   tone: "info",
 };
 
+const TAB_COPY: Record<TabId, { title: string; subtitle: string }> = {
+  services: {
+    title: "Services",
+    subtitle: "Monitored endpoints, probe settings, and live status.",
+  },
+  maintenance: {
+    title: "Maintenance",
+    subtitle: "Schedule windows shown on the public status page.",
+  },
+  incidents: {
+    title: "Incidents",
+    subtitle: "Open and resolved incidents visible to customers.",
+  },
+  notice: {
+    title: "Notice",
+    subtitle: "Public banner at the top of the status page.",
+  },
+};
+
 export function AdminApp() {
   const [loading, setLoading] = useState(true);
   const [authed, setAuthed] = useState(false);
@@ -665,12 +684,14 @@ export function AdminApp() {
     (m) => maintenancePhase(m) === "scheduled",
   ).length;
 
+  const tabCopy = TAB_COPY[tab];
+
   if (loading) {
     return (
-      <div className="admin-shell">
+      <div className="admin-shell is-loading">
         <div className="admin-loading-block">
           <span className="loader" />
-          <p>Loading control room…</p>
+          <p>Loading ops console…</p>
         </div>
       </div>
     );
@@ -696,26 +717,40 @@ export function AdminApp() {
           <motion.div
             key="login"
             className="admin-login"
-            initial={{ opacity: 0, y: 18 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
           >
-            <div className="admin-login-copy">
+            <motion.div
+              className="admin-login-brand"
+              initial={{ opacity: 0, x: -24 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+            >
               <p className="brand">SpiritHost</p>
-              <h1>Status control</h1>
-              <p>
-                Monitor endpoints, announce maintenance, and keep the public
-                status page honest.
+              <p className="admin-login-lead">
+                Ops console for probes, maintenance, and public status.
               </p>
-            </div>
+              <a href="/" className="text-btn admin-login-public">
+                View public page
+              </a>
+            </motion.div>
 
-            <form className="admin-login-card" onSubmit={onLogin}>
-              <div className="admin-login-card-head">
-                <h2>Admin access</h2>
-                <a href="/" className="text-btn">
-                  View public page
-                </a>
+            <motion.form
+              className="admin-login-form"
+              onSubmit={onLogin}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{
+                duration: 0.5,
+                delay: 0.08,
+                ease: [0.22, 1, 0.36, 1],
+              }}
+            >
+              <div className="admin-login-form-head">
+                <p className="editor-kicker">Admin access</p>
+                <h1>Sign in</h1>
               </div>
               <label>
                 Password
@@ -732,33 +767,92 @@ export function AdminApp() {
               <button type="submit" className="primary-btn" disabled={busy}>
                 {busy ? "Signing in…" : "Continue"}
               </button>
-            </form>
+            </motion.form>
           </motion.div>
         ) : (
           <motion.div
             key="dash"
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
+            className="admin-console"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.4 }}
-            className="admin-app"
+            transition={{ duration: 0.35 }}
           >
-            <header className="admin-header">
-              <div className="admin-header-brand">
+            <motion.aside
+              className="admin-rail"
+              initial={{ opacity: 0, x: -16 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="admin-rail-top">
                 <p className="brand compact">SpiritHost</p>
-                <div>
-                  <h1>Control room</h1>
-                  <p className="admin-subtitle">
-                    {lastCheckAt
-                      ? `Last probe ${formatRelative(lastCheckAt)}`
-                      : "Waiting for first probe"}
-                    {openIncidents
-                      ? ` · ${openIncidents} open incident${openIncidents === 1 ? "" : "s"}`
-                      : ""}
-                  </p>
-                </div>
+                <p className="admin-rail-label">Ops console</p>
               </div>
-              <div className="admin-header-actions">
+
+              <nav className="admin-rail-nav" aria-label="Admin sections">
+                <button
+                  type="button"
+                  className={tab === "services" ? "is-active" : ""}
+                  onClick={() => setTab("services")}
+                >
+                  <span>Services</span>
+                  <em>{services.length}</em>
+                </button>
+                <button
+                  type="button"
+                  className={tab === "maintenance" ? "is-active" : ""}
+                  onClick={() => setTab("maintenance")}
+                >
+                  <span>Maintenance</span>
+                  <em>{maintenances.length}</em>
+                </button>
+                <button
+                  type="button"
+                  className={tab === "incidents" ? "is-active" : ""}
+                  onClick={() => setTab("incidents")}
+                >
+                  <span>Incidents</span>
+                  <em>{incidents.length}</em>
+                </button>
+                <button
+                  type="button"
+                  className={tab === "notice" ? "is-active" : ""}
+                  onClick={() => setTab("notice")}
+                >
+                  <span>Notice</span>
+                  {announcement?.enabled ? <em>on</em> : null}
+                </button>
+              </nav>
+
+              <div className="admin-rail-stats" aria-label="Live status">
+                <div>
+                  <span>Up</span>
+                  <strong className="tone-up">{upCount}</strong>
+                </div>
+                <div>
+                  <span>Degraded</span>
+                  <strong className="tone-warn">{degradedCount}</strong>
+                </div>
+                <div>
+                  <span>Down</span>
+                  <strong className="tone-down">{downCount}</strong>
+                </div>
+                <div>
+                  <span>Maint</span>
+                  <strong className="tone-maint">{activeMaint}</strong>
+                </div>
+                <p className="admin-rail-probe">
+                  {lastCheckAt
+                    ? `Probed ${formatRelative(lastCheckAt)}`
+                    : "Waiting for first probe"}
+                  {openIncidents
+                    ? ` · ${openIncidents} open`
+                    : ""}
+                  {scheduledMaint ? ` · ${scheduledMaint} scheduled` : ""}
+                </p>
+              </div>
+
+              <div className="admin-rail-actions">
                 <button
                   type="button"
                   className="ghost-btn"
@@ -768,118 +862,64 @@ export function AdminApp() {
                   Check now
                 </button>
                 <a href="/" className="ghost-link">
-                  Public page
+                  Public
                 </a>
                 <button type="button" className="ghost-btn" onClick={onLogout}>
                   Log out
                 </button>
               </div>
-            </header>
+            </motion.aside>
 
-            <section className="admin-metrics" aria-label="Status summary">
-              <article className="metric-card">
-                <span className="metric-label">Services</span>
-                <strong>{services.length}</strong>
-              </article>
-              <article className="metric-card tone-up">
-                <span className="metric-label">Operational</span>
-                <strong>{upCount}</strong>
-              </article>
-              <article className="metric-card tone-warn">
-                <span className="metric-label">Degraded</span>
-                <strong>{degradedCount}</strong>
-              </article>
-              <article className="metric-card tone-maint">
-                <span className="metric-label">Maintenance</span>
-                <strong>{activeMaint}</strong>
-                <em>{scheduledMaint} scheduled</em>
-              </article>
-              <article className="metric-card tone-down">
-                <span className="metric-label">Down</span>
-                <strong>{downCount}</strong>
-              </article>
-            </section>
+            <main className="admin-canvas">
+              <header className="admin-canvas-head">
+                <h1>{tabCopy.title}</h1>
+                <p>{tabCopy.subtitle}</p>
+              </header>
 
-            <nav className="admin-tabs" aria-label="Admin sections">
-              <button
-                type="button"
-                className={tab === "services" ? "is-active" : ""}
-                onClick={() => setTab("services")}
-              >
-                Services
-                <span>{services.length}</span>
-              </button>
-              <button
-                type="button"
-                className={tab === "maintenance" ? "is-active" : ""}
-                onClick={() => setTab("maintenance")}
-              >
-                Maintenance
-                <span>{maintenances.length}</span>
-              </button>
-              <button
-                type="button"
-                className={tab === "incidents" ? "is-active" : ""}
-                onClick={() => setTab("incidents")}
-              >
-                Incidents
-                <span>{incidents.length}</span>
-              </button>
-              <button
-                type="button"
-                className={tab === "notice" ? "is-active" : ""}
-                onClick={() => setTab("notice")}
-              >
-                Notice
-              </button>
-            </nav>
-
-            <AnimatePresence mode="wait">
-              {tab === "services" ? (
-                <motion.div
-                  key="services"
-                  className="admin-workspace"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.28 }}
-                >
-                  <section className="admin-stream">
-                    <div className="stream-head">
-                      <h2>Monitored endpoints</h2>
-                      <p>Click a service to edit it in the side panel.</p>
-                    </div>
-
-                    {!services.length ? (
-                      <div className="admin-empty">
-                        <p>No services yet</p>
-                        <span>Add your first website on the right.</span>
-                      </div>
-                    ) : (
-                      <ul className="entity-list">
-                        {services.map((service, idx) => {
-                          const status = service.enabled
-                            ? (service.latest?.status ?? "unknown")
-                            : "unknown";
-                          const selected = editingId === service.id;
-                          return (
-                            <li key={service.id}>
-                              <button
-                                type="button"
-                                className={`entity-card ${selected ? "is-selected" : ""}`}
-                                onClick={() => startEdit(service)}
+              <AnimatePresence mode="wait">
+                {tab === "services" ? (
+                  <motion.div
+                    key="services"
+                    className="admin-workspace"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.28 }}
+                  >
+                    <section className="admin-stream">
+                      {!services.length ? (
+                        <div className="admin-empty">
+                          <p>No services yet</p>
+                          <span>Add your first website in the editor.</span>
+                        </div>
+                      ) : (
+                        <ul className="ops-list">
+                          {services.map((service, idx) => {
+                            const status = service.enabled
+                              ? (service.latest?.status ?? "unknown")
+                              : "unknown";
+                            const selected = editingId === service.id;
+                            return (
+                              <li
+                                key={service.id}
+                                className={`ops-row ${selected ? "is-selected" : ""}`}
                               >
-                                <div className="entity-main">
+                                <button
+                                  type="button"
+                                  className="ops-row-main"
+                                  onClick={() => startEdit(service)}
+                                >
                                   <StatusDot status={status} />
-                                  <div>
-                                    <p className="entity-title">
+                                  <div className="ops-row-copy">
+                                    <p className="ops-row-title">
                                       {service.name}
                                       <span className="group-chip">
                                         {service.group}
                                       </span>
                                     </p>
-                                    <p className="entity-sub">{service.url}</p>
-                                    <p className="entity-meta">
+                                    <p className="ops-row-meta">
+                                      {service.url}
+                                      {" · "}
                                       {service.enabled
                                         ? statusLabel(status)
                                         : "Paused"}
@@ -890,220 +930,223 @@ export function AdminApp() {
                                         : ""}
                                     </p>
                                     {service.latest?.error ? (
-                                      <p className="entity-error">
+                                      <p className="ops-row-error">
                                         {service.latest.error}
                                       </p>
                                     ) : null}
                                   </div>
+                                </button>
+                                <div className="ops-row-actions">
+                                  <button
+                                    type="button"
+                                    className="ghost-btn"
+                                    onClick={() => toggleEnabled(service)}
+                                    disabled={busy}
+                                  >
+                                    {service.enabled ? "Pause" : "Resume"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="ghost-btn"
+                                    onClick={() => moveService(service, "up")}
+                                    disabled={busy || idx === 0}
+                                  >
+                                    ↑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="ghost-btn"
+                                    onClick={() => moveService(service, "down")}
+                                    disabled={
+                                      busy || idx === services.length - 1
+                                    }
+                                  >
+                                    ↓
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="danger-btn"
+                                    onClick={() => removeService(service)}
+                                    disabled={busy}
+                                  >
+                                    Remove
+                                  </button>
                                 </div>
-                              </button>
-                              <div className="entity-actions">
-                                <button
-                                  type="button"
-                                  className="ghost-btn"
-                                  onClick={() => toggleEnabled(service)}
-                                  disabled={busy}
-                                >
-                                  {service.enabled ? "Pause" : "Resume"}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="ghost-btn"
-                                  onClick={() => moveService(service, "up")}
-                                  disabled={busy || idx === 0}
-                                >
-                                  ↑
-                                </button>
-                                <button
-                                  type="button"
-                                  className="ghost-btn"
-                                  onClick={() => moveService(service, "down")}
-                                  disabled={busy || idx === services.length - 1}
-                                >
-                                  ↓
-                                </button>
-                                <button
-                                  type="button"
-                                  className="danger-btn"
-                                  onClick={() => removeService(service)}
-                                  disabled={busy}
-                                >
-                                  Remove
-                                </button>
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </section>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </section>
 
-                  <aside className="admin-editor">
-                    <form onSubmit={onSubmit}>
-                      <div className="editor-head">
-                        <div>
-                          <p className="editor-kicker">
-                            {editingId ? "Editing" : "New monitor"}
-                          </p>
-                          <h2>{editingId ? "Edit service" : "Add service"}</h2>
+                    <aside className="admin-editor">
+                      <form onSubmit={onSubmit}>
+                        <div className="editor-head">
+                          <div>
+                            <p className="editor-kicker">
+                              {editingId ? "Editing" : "New monitor"}
+                            </p>
+                            <h2>
+                              {editingId ? "Edit service" : "Add service"}
+                            </h2>
+                          </div>
+                          {editingId ? (
+                            <button
+                              type="button"
+                              className="ghost-btn"
+                              onClick={cancelEdit}
+                            >
+                              Clear
+                            </button>
+                          ) : null}
                         </div>
-                        {editingId ? (
-                          <button
-                            type="button"
-                            className="ghost-btn"
-                            onClick={cancelEdit}
-                          >
-                            Clear
-                          </button>
-                        ) : null}
-                      </div>
 
-                      <div className="form-stack">
-                        <label>
-                          Name
-                          <input
-                            value={form.name}
-                            onChange={(e) =>
-                              setForm((f) => ({ ...f, name: e.target.value }))
-                            }
-                            placeholder="Billing portal"
-                            required
-                          />
-                        </label>
-                        <label>
-                          URL
-                          <input
-                            value={form.url}
-                            onChange={(e) =>
-                              setForm((f) => ({ ...f, url: e.target.value }))
-                            }
-                            placeholder="https://panel.spirithost.co.uk"
-                            required
-                          />
-                        </label>
-                        <label>
-                          Description
-                          <textarea
-                            value={form.description}
-                            onChange={(e) =>
-                              setForm((f) => ({
-                                ...f,
-                                description: e.target.value,
-                              }))
-                            }
-                            placeholder="Optional note on the public page"
-                            rows={3}
-                          />
-                        </label>
-                        <div className="form-row">
+                        <div className="form-stack">
                           <label>
-                            Group
+                            Name
                             <input
-                              value={form.group}
+                              value={form.name}
                               onChange={(e) =>
                                 setForm((f) => ({
                                   ...f,
-                                  group: e.target.value,
+                                  name: e.target.value,
                                 }))
                               }
-                              placeholder="General"
+                              placeholder="Billing portal"
+                              required
                             />
                           </label>
                           <label>
-                            Method
-                            <select
-                              value={form.method}
+                            URL
+                            <input
+                              value={form.url}
                               onChange={(e) =>
                                 setForm((f) => ({
                                   ...f,
-                                  method: e.target.value as CheckMethod,
+                                  url: e.target.value,
                                 }))
                               }
-                            >
-                              <option value="GET">GET</option>
-                              <option value="HEAD">HEAD</option>
-                            </select>
+                              placeholder="https://panel.spirithost.co.uk"
+                              required
+                            />
+                          </label>
+                          <label>
+                            Description
+                            <textarea
+                              value={form.description}
+                              onChange={(e) =>
+                                setForm((f) => ({
+                                  ...f,
+                                  description: e.target.value,
+                                }))
+                              }
+                              placeholder="Optional note on the public page"
+                              rows={3}
+                            />
+                          </label>
+                          <div className="form-row">
+                            <label>
+                              Group
+                              <input
+                                value={form.group}
+                                onChange={(e) =>
+                                  setForm((f) => ({
+                                    ...f,
+                                    group: e.target.value,
+                                  }))
+                                }
+                                placeholder="General"
+                              />
+                            </label>
+                            <label>
+                              Method
+                              <select
+                                value={form.method}
+                                onChange={(e) =>
+                                  setForm((f) => ({
+                                    ...f,
+                                    method: e.target.value as CheckMethod,
+                                  }))
+                                }
+                              >
+                                <option value="GET">GET</option>
+                                <option value="HEAD">HEAD</option>
+                              </select>
+                            </label>
+                          </div>
+                          <label>
+                            Expected Status Codes
+                            <input
+                              value={form.expectedStatusCodes}
+                              onChange={(e) =>
+                                setForm((f) => ({
+                                  ...f,
+                                  expectedStatusCodes: e.target.value,
+                                }))
+                              }
+                              placeholder="200,204"
+                              required
+                            />
                           </label>
                         </div>
-                        <label>
-                          Expected Status Codes
-                          <input
-                            value={form.expectedStatusCodes}
-                            onChange={(e) =>
-                              setForm((f) => ({
-                                ...f,
-                                expectedStatusCodes: e.target.value,
-                              }))
-                            }
-                            placeholder="200,204"
-                            required
-                          />
-                        </label>
-                      </div>
 
-                      {error ? <p className="form-error">{error}</p> : null}
-                      <button
-                        type="submit"
-                        className="primary-btn"
-                        disabled={busy}
-                      >
-                        {busy
-                          ? "Saving…"
-                          : editingId
-                            ? "Save changes"
-                            : "Add service"}
-                      </button>
-                    </form>
-                  </aside>
-                </motion.div>
-              ) : tab === "maintenance" ? (
-                <motion.div
-                  key="maintenance"
-                  className="admin-workspace"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.28 }}
-                >
-                  <section className="admin-stream">
-                    <div className="stream-head">
-                      <h2>Maintenance windows</h2>
-                      <p>
-                        Scheduled and active work shown on the public status
-                        page.
-                      </p>
-                    </div>
-
-                    {!sortedMaintenances.length ? (
-                      <div className="admin-empty">
-                        <p>No maintenance yet</p>
-                        <span>Schedule a window from the editor.</span>
-                      </div>
-                    ) : (
-                      <ul className="entity-list">
-                        {sortedMaintenances.map((item) => {
-                          const phase = maintenancePhase(item);
-                          const selected = editingMaintId === item.id;
-                          const names = !item.serviceIds.length
-                            ? "All services"
-                            : item.serviceIds
-                                .map(
-                                  (id) =>
-                                    services.find((s) => s.id === id)?.name ??
-                                    id,
-                                )
-                                .join(", ");
-                          return (
-                            <li key={item.id}>
-                              <button
-                                type="button"
-                                className={`entity-card ${selected ? "is-selected" : ""}`}
-                                onClick={() => startMaintEdit(item)}
+                        {error ? <p className="form-error">{error}</p> : null}
+                        <button
+                          type="submit"
+                          className="primary-btn primary-btn-block"
+                          disabled={busy}
+                        >
+                          {busy
+                            ? "Saving…"
+                            : editingId
+                              ? "Save changes"
+                              : "Add service"}
+                        </button>
+                      </form>
+                    </aside>
+                  </motion.div>
+                ) : tab === "maintenance" ? (
+                  <motion.div
+                    key="maintenance"
+                    className="admin-workspace"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.28 }}
+                  >
+                    <section className="admin-stream">
+                      {!sortedMaintenances.length ? (
+                        <div className="admin-empty">
+                          <p>No maintenance yet</p>
+                          <span>Schedule a window from the editor.</span>
+                        </div>
+                      ) : (
+                        <ul className="ops-list">
+                          {sortedMaintenances.map((item) => {
+                            const phase = maintenancePhase(item);
+                            const selected = editingMaintId === item.id;
+                            const names = !item.serviceIds.length
+                              ? "All services"
+                              : item.serviceIds
+                                  .map(
+                                    (id) =>
+                                      services.find((s) => s.id === id)
+                                        ?.name ?? id,
+                                  )
+                                  .join(", ");
+                            return (
+                              <li
+                                key={item.id}
+                                className={`ops-row ${selected ? "is-selected" : ""}`}
                               >
-                                <div className="entity-main">
+                                <button
+                                  type="button"
+                                  className="ops-row-main"
+                                  onClick={() => startMaintEdit(item)}
+                                >
                                   <StatusDot status="maintenance" />
-                                  <div>
-                                    <p className="entity-title">
+                                  <div className="ops-row-copy">
+                                    <p className="ops-row-title">
                                       {item.title}
                                       <span
                                         className={`pill maintenance ${phase}`}
@@ -1112,224 +1155,226 @@ export function AdminApp() {
                                       </span>
                                     </p>
                                     {item.message ? (
-                                      <p className="entity-sub">
+                                      <p className="ops-row-sub">
                                         {item.message}
                                       </p>
                                     ) : null}
-                                    <p className="entity-meta">
-                                      {formatWindow(item.startsAt, item.endsAt)}
+                                    <p className="ops-row-meta">
+                                      {formatWindow(
+                                        item.startsAt,
+                                        item.endsAt,
+                                      )}
                                       {" · "}
                                       {names}
                                     </p>
                                   </div>
-                                </div>
-                              </button>
-                              <div className="entity-actions">
-                                {phase === "active" ? (
+                                </button>
+                                <div className="ops-row-actions">
+                                  {phase === "active" ? (
+                                    <button
+                                      type="button"
+                                      className="ghost-btn"
+                                      onClick={() => endMaintenanceNow(item)}
+                                      disabled={busy}
+                                    >
+                                      End now
+                                    </button>
+                                  ) : null}
                                   <button
                                     type="button"
-                                    className="ghost-btn"
-                                    onClick={() => endMaintenanceNow(item)}
+                                    className="danger-btn"
+                                    onClick={() => removeMaintenance(item)}
                                     disabled={busy}
                                   >
-                                    End now
+                                    Delete
                                   </button>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  className="danger-btn"
-                                  onClick={() => removeMaintenance(item)}
-                                  disabled={busy}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </section>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </section>
 
-                  <aside className="admin-editor">
-                    <form onSubmit={onMaintSubmit}>
-                      <div className="editor-head">
-                        <div>
-                          <p className="editor-kicker">
-                            {editingMaintId ? "Editing" : "New window"}
-                          </p>
-                          <h2>
-                            {editingMaintId
-                              ? "Edit maintenance"
-                              : "Schedule maintenance"}
-                          </h2>
-                        </div>
-                        {editingMaintId ? (
-                          <button
-                            type="button"
-                            className="ghost-btn"
-                            onClick={cancelMaintEdit}
-                          >
-                            Clear
-                          </button>
-                        ) : null}
-                      </div>
-
-                      <div className="form-stack">
-                        <label>
-                          Title
-                          <input
-                            value={maintForm.title}
-                            onChange={(e) =>
-                              setMaintForm((f) => ({
-                                ...f,
-                                title: e.target.value,
-                              }))
-                            }
-                            placeholder="Panel database upgrade"
-                            required
-                          />
-                        </label>
-                        <label>
-                          Message
-                          <textarea
-                            value={maintForm.message}
-                            onChange={(e) =>
-                              setMaintForm((f) => ({
-                                ...f,
-                                message: e.target.value,
-                              }))
-                            }
-                            placeholder="What customers should expect"
-                            rows={3}
-                          />
-                        </label>
-                        <div className="form-row">
-                          <label>
-                            Starts
-                            <input
-                              type="datetime-local"
-                              value={maintForm.startsAt}
-                              onChange={(e) =>
-                                setMaintForm((f) => ({
-                                  ...f,
-                                  startsAt: e.target.value,
-                                }))
-                              }
-                              required
-                            />
-                          </label>
-                          <label>
-                            Ends
-                            <input
-                              type="datetime-local"
-                              value={maintForm.endsAt}
-                              onChange={(e) =>
-                                setMaintForm((f) => ({
-                                  ...f,
-                                  endsAt: e.target.value,
-                                }))
-                              }
-                              required
-                            />
-                          </label>
-                        </div>
-
-                        <div className="maint-targets">
-                          <label className="check-row">
-                            <input
-                              type="checkbox"
-                              checked={maintForm.allServices}
-                              onChange={(e) =>
-                                setMaintForm((f) => ({
-                                  ...f,
-                                  allServices: e.target.checked,
-                                  serviceIds: e.target.checked
-                                    ? []
-                                    : f.serviceIds,
-                                }))
-                              }
-                            />
-                            Affects all services
-                          </label>
-
-                          {!maintForm.allServices ? (
-                            <div className="service-check-grid">
-                              {services.map((service) => (
-                                <label key={service.id} className="check-row">
-                                  <input
-                                    type="checkbox"
-                                    checked={maintForm.serviceIds.includes(
-                                      service.id,
-                                    )}
-                                    onChange={() =>
-                                      toggleMaintService(service.id)
-                                    }
-                                  />
-                                  {service.name}
-                                </label>
-                              ))}
-                            </div>
+                    <aside className="admin-editor">
+                      <form onSubmit={onMaintSubmit}>
+                        <div className="editor-head">
+                          <div>
+                            <p className="editor-kicker">
+                              {editingMaintId ? "Editing" : "New window"}
+                            </p>
+                            <h2>
+                              {editingMaintId
+                                ? "Edit maintenance"
+                                : "Schedule maintenance"}
+                            </h2>
+                          </div>
+                          {editingMaintId ? (
+                            <button
+                              type="button"
+                              className="ghost-btn"
+                              onClick={cancelMaintEdit}
+                            >
+                              Clear
+                            </button>
                           ) : null}
                         </div>
-                      </div>
 
-                      {maintError ? (
-                        <p className="form-error">{maintError}</p>
-                      ) : null}
-                      <button
-                        type="submit"
-                        className="primary-btn"
-                        disabled={busy}
-                      >
-                        {busy
-                          ? "Saving…"
-                          : editingMaintId
-                            ? "Save maintenance"
-                            : "Create maintenance"}
-                      </button>
-                    </form>
-                  </aside>
-                </motion.div>
-              ) : tab === "incidents" ? (
-                <motion.div
-                  key="incidents"
-                  className="admin-workspace"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.28 }}
-                >
-                  <section className="admin-stream">
-                    <div className="stream-head">
-                      <h2>Incidents</h2>
-                      <p>Open and resolved incidents shown to the public.</p>
-                    </div>
+                        <div className="form-stack">
+                          <label>
+                            Title
+                            <input
+                              value={maintForm.title}
+                              onChange={(e) =>
+                                setMaintForm((f) => ({
+                                  ...f,
+                                  title: e.target.value,
+                                }))
+                              }
+                              placeholder="Panel database upgrade"
+                              required
+                            />
+                          </label>
+                          <label>
+                            Message
+                            <textarea
+                              value={maintForm.message}
+                              onChange={(e) =>
+                                setMaintForm((f) => ({
+                                  ...f,
+                                  message: e.target.value,
+                                }))
+                              }
+                              placeholder="What customers should expect"
+                              rows={3}
+                            />
+                          </label>
+                          <div className="form-row">
+                            <label>
+                              Starts
+                              <input
+                                type="datetime-local"
+                                value={maintForm.startsAt}
+                                onChange={(e) =>
+                                  setMaintForm((f) => ({
+                                    ...f,
+                                    startsAt: e.target.value,
+                                  }))
+                                }
+                                required
+                              />
+                            </label>
+                            <label>
+                              Ends
+                              <input
+                                type="datetime-local"
+                                value={maintForm.endsAt}
+                                onChange={(e) =>
+                                  setMaintForm((f) => ({
+                                    ...f,
+                                    endsAt: e.target.value,
+                                  }))
+                                }
+                                required
+                              />
+                            </label>
+                          </div>
 
-                    {!sortedIncidents.length ? (
-                      <div className="admin-empty">
-                        <p>No incidents</p>
-                        <span>Create a manual incident from the editor.</span>
-                      </div>
-                    ) : (
-                      <ul className="entity-list">
-                        {sortedIncidents.map((incident) => {
-                          const isOpen = !incident.resolvedAt;
-                          const serviceNames = incident.serviceIds
-                            .map(
-                              (id) =>
-                                services.find((s) => s.id === id)?.name ?? id,
-                            )
-                            .join(", ");
-                          const addingUpdate =
-                            addingUpdateToIncidentId === incident.id;
-                          return (
-                            <li key={incident.id}>
-                              <div className="entity-card">
-                                <div className="entity-main">
+                          <div className="maint-targets">
+                            <label className="check-row">
+                              <input
+                                type="checkbox"
+                                checked={maintForm.allServices}
+                                onChange={(e) =>
+                                  setMaintForm((f) => ({
+                                    ...f,
+                                    allServices: e.target.checked,
+                                    serviceIds: e.target.checked
+                                      ? []
+                                      : f.serviceIds,
+                                  }))
+                                }
+                              />
+                              Affects all services
+                            </label>
+
+                            {!maintForm.allServices ? (
+                              <div className="service-check-grid">
+                                {services.map((service) => (
+                                  <label
+                                    key={service.id}
+                                    className="check-row"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={maintForm.serviceIds.includes(
+                                        service.id,
+                                      )}
+                                      onChange={() =>
+                                        toggleMaintService(service.id)
+                                      }
+                                    />
+                                    {service.name}
+                                  </label>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        {maintError ? (
+                          <p className="form-error">{maintError}</p>
+                        ) : null}
+                        <button
+                          type="submit"
+                          className="primary-btn primary-btn-block"
+                          disabled={busy}
+                        >
+                          {busy
+                            ? "Saving…"
+                            : editingMaintId
+                              ? "Save maintenance"
+                              : "Create maintenance"}
+                        </button>
+                      </form>
+                    </aside>
+                  </motion.div>
+                ) : tab === "incidents" ? (
+                  <motion.div
+                    key="incidents"
+                    className="admin-workspace"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.28 }}
+                  >
+                    <section className="admin-stream">
+                      {!sortedIncidents.length ? (
+                        <div className="admin-empty">
+                          <p>No incidents</p>
+                          <span>
+                            Create a manual incident from the editor.
+                          </span>
+                        </div>
+                      ) : (
+                        <ul className="ops-list">
+                          {sortedIncidents.map((incident) => {
+                            const isOpen = !incident.resolvedAt;
+                            const serviceNames = incident.serviceIds
+                              .map(
+                                (id) =>
+                                  services.find((s) => s.id === id)?.name ??
+                                  id,
+                              )
+                              .join(", ");
+                            const addingUpdate =
+                              addingUpdateToIncidentId === incident.id;
+                            return (
+                              <li key={incident.id} className="ops-row is-block">
+                                <div className="ops-row-main is-static">
                                   <StatusDot status={incident.status} />
-                                  <div>
-                                    <p className="entity-title">
+                                  <div className="ops-row-copy">
+                                    <p className="ops-row-title">
                                       {incident.serviceName}
                                       <span
                                         className={`pill ${isOpen ? "open" : "resolved"}`}
@@ -1337,17 +1382,19 @@ export function AdminApp() {
                                         {isOpen ? "Open" : "Resolved"}
                                       </span>
                                     </p>
-                                    <p className="entity-sub">
+                                    <p className="ops-row-sub">
                                       {incident.message}
                                     </p>
-                                    <p className="entity-meta">
+                                    <p className="ops-row-meta">
                                       {formatRelative(incident.startedAt)}
                                       {" · "}
                                       {incident.source}
-                                      {serviceNames ? ` · ${serviceNames}` : ""}
+                                      {serviceNames
+                                        ? ` · ${serviceNames}`
+                                        : ""}
                                     </p>
                                     {incident.updates.length > 0 ? (
-                                      <div className="incident-updates">
+                                      <div className="admin-incident-updates">
                                         {incident.updates.map((update) => (
                                           <div
                                             key={update.id}
@@ -1366,324 +1413,323 @@ export function AdminApp() {
                                     ) : null}
                                   </div>
                                 </div>
-                              </div>
-                              {isOpen ? (
-                                <div className="entity-actions">
-                                  <button
-                                    type="button"
-                                    className="ghost-btn"
-                                    onClick={() =>
-                                      setAddingUpdateToIncidentId(
-                                        addingUpdate ? null : incident.id,
-                                      )
-                                    }
-                                    disabled={busy}
-                                  >
-                                    {addingUpdate ? "Cancel" : "Add update"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="primary-btn"
-                                    onClick={() => resolveIncident(incident)}
-                                    disabled={busy}
-                                  >
-                                    Resolve
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="danger-btn"
-                                    onClick={() => removeIncident(incident)}
-                                    disabled={busy}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="entity-actions">
-                                  <button
-                                    type="button"
-                                    className="danger-btn"
-                                    onClick={() => removeIncident(incident)}
-                                    disabled={busy}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              )}
-                              {addingUpdate ? (
-                                <form
-                                  className="incident-update-form"
-                                  onSubmit={(e) =>
-                                    onIncidentUpdateSubmit(e, incident.id)
-                                  }
-                                >
-                                  <label>
-                                    Status
-                                    <select
-                                      value={incidentUpdateForm.status}
-                                      onChange={(e) =>
-                                        setIncidentUpdateForm((f) => ({
-                                          ...f,
-                                          status: e.target
-                                            .value as IncidentUpdateStatus,
-                                        }))
+                                {isOpen ? (
+                                  <div className="ops-row-actions">
+                                    <button
+                                      type="button"
+                                      className="ghost-btn"
+                                      onClick={() =>
+                                        setAddingUpdateToIncidentId(
+                                          addingUpdate ? null : incident.id,
+                                        )
                                       }
+                                      disabled={busy}
                                     >
-                                      <option value="investigating">
-                                        Investigating
-                                      </option>
-                                      <option value="identified">
-                                        Identified
-                                      </option>
-                                      <option value="monitoring">
-                                        Monitoring
-                                      </option>
-                                      <option value="resolved">Resolved</option>
-                                      <option value="update">Update</option>
-                                    </select>
-                                  </label>
-                                  <label>
-                                    Message
-                                    <textarea
-                                      value={incidentUpdateForm.message}
-                                      onChange={(e) =>
-                                        setIncidentUpdateForm((f) => ({
-                                          ...f,
-                                          message: e.target.value,
-                                        }))
-                                      }
-                                      placeholder="Update message"
-                                      rows={2}
-                                      required
-                                    />
-                                  </label>
-                                  {incidentUpdateError ? (
-                                    <p className="form-error">
-                                      {incidentUpdateError}
-                                    </p>
-                                  ) : null}
-                                  <button
-                                    type="submit"
-                                    className="primary-btn"
-                                    disabled={busy}
+                                      {addingUpdate ? "Cancel" : "Add update"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="primary-btn"
+                                      onClick={() => resolveIncident(incident)}
+                                      disabled={busy}
+                                    >
+                                      Resolve
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="danger-btn"
+                                      onClick={() => removeIncident(incident)}
+                                      disabled={busy}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="ops-row-actions">
+                                    <button
+                                      type="button"
+                                      className="danger-btn"
+                                      onClick={() => removeIncident(incident)}
+                                      disabled={busy}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                )}
+                                {addingUpdate ? (
+                                  <form
+                                    className="incident-update-form"
+                                    onSubmit={(e) =>
+                                      onIncidentUpdateSubmit(e, incident.id)
+                                    }
                                   >
-                                    {busy ? "Adding…" : "Add update"}
-                                  </button>
-                                </form>
-                              ) : null}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </section>
+                                    <label>
+                                      Status
+                                      <select
+                                        value={incidentUpdateForm.status}
+                                        onChange={(e) =>
+                                          setIncidentUpdateForm((f) => ({
+                                            ...f,
+                                            status: e.target
+                                              .value as IncidentUpdateStatus,
+                                          }))
+                                        }
+                                      >
+                                        <option value="investigating">
+                                          Investigating
+                                        </option>
+                                        <option value="identified">
+                                          Identified
+                                        </option>
+                                        <option value="monitoring">
+                                          Monitoring
+                                        </option>
+                                        <option value="resolved">
+                                          Resolved
+                                        </option>
+                                        <option value="update">Update</option>
+                                      </select>
+                                    </label>
+                                    <label>
+                                      Message
+                                      <textarea
+                                        value={incidentUpdateForm.message}
+                                        onChange={(e) =>
+                                          setIncidentUpdateForm((f) => ({
+                                            ...f,
+                                            message: e.target.value,
+                                          }))
+                                        }
+                                        placeholder="Update message"
+                                        rows={2}
+                                        required
+                                      />
+                                    </label>
+                                    {incidentUpdateError ? (
+                                      <p className="form-error">
+                                        {incidentUpdateError}
+                                      </p>
+                                    ) : null}
+                                    <button
+                                      type="submit"
+                                      className="primary-btn"
+                                      disabled={busy}
+                                    >
+                                      {busy ? "Adding…" : "Add update"}
+                                    </button>
+                                  </form>
+                                ) : null}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </section>
 
-                  <aside className="admin-editor">
-                    <form onSubmit={onIncidentSubmit}>
-                      <div className="editor-head">
-                        <div>
-                          <p className="editor-kicker">New incident</p>
-                          <h2>Create manual incident</h2>
-                        </div>
-                      </div>
-
-                      <div className="form-stack">
-                        <label>
-                          Title
-                          <input
-                            value={incidentForm.title}
-                            onChange={(e) =>
-                              setIncidentForm((f) => ({
-                                ...f,
-                                title: e.target.value,
-                              }))
-                            }
-                            placeholder="Service outage"
-                            required
-                          />
-                        </label>
-                        <label>
-                          Message
-                          <textarea
-                            value={incidentForm.message}
-                            onChange={(e) =>
-                              setIncidentForm((f) => ({
-                                ...f,
-                                message: e.target.value,
-                              }))
-                            }
-                            placeholder="Describe the issue"
-                            rows={3}
-                            required
-                          />
-                        </label>
-                        <label>
-                          Status
-                          <select
-                            value={incidentForm.status}
-                            onChange={(e) =>
-                              setIncidentForm((f) => ({
-                                ...f,
-                                status: e.target.value as "degraded" | "down",
-                              }))
-                            }
-                          >
-                            <option value="degraded">Degraded</option>
-                            <option value="down">Down</option>
-                          </select>
-                        </label>
-
-                        <div className="maint-targets">
-                          <p className="form-label">Affected services</p>
-                          <div className="service-check-grid">
-                            {services.map((service) => (
-                              <label key={service.id} className="check-row">
-                                <input
-                                  type="checkbox"
-                                  checked={incidentForm.serviceIds.includes(
-                                    service.id,
-                                  )}
-                                  onChange={() =>
-                                    toggleIncidentService(service.id)
-                                  }
-                                />
-                                {service.name}
-                              </label>
-                            ))}
+                    <aside className="admin-editor">
+                      <form onSubmit={onIncidentSubmit}>
+                        <div className="editor-head">
+                          <div>
+                            <p className="editor-kicker">New incident</p>
+                            <h2>Create manual incident</h2>
                           </div>
                         </div>
-                      </div>
 
-                      {incidentError ? (
-                        <p className="form-error">{incidentError}</p>
-                      ) : null}
-                      <button
-                        type="submit"
-                        className="primary-btn"
-                        disabled={busy}
-                      >
-                        {busy ? "Creating…" : "Create incident"}
-                      </button>
-                    </form>
-                  </aside>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="notice"
-                  className="admin-workspace"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.28 }}
-                >
-                  <section className="admin-stream">
-                    <div className="stream-head">
-                      <h2>Public announcement</h2>
-                      <p>
-                        A banner shown at the top of the public status page.
-                      </p>
-                    </div>
+                        <div className="form-stack">
+                          <label>
+                            Title
+                            <input
+                              value={incidentForm.title}
+                              onChange={(e) =>
+                                setIncidentForm((f) => ({
+                                  ...f,
+                                  title: e.target.value,
+                                }))
+                              }
+                              placeholder="Service outage"
+                              required
+                            />
+                          </label>
+                          <label>
+                            Message
+                            <textarea
+                              value={incidentForm.message}
+                              onChange={(e) =>
+                                setIncidentForm((f) => ({
+                                  ...f,
+                                  message: e.target.value,
+                                }))
+                              }
+                              placeholder="Describe the issue"
+                              rows={3}
+                              required
+                            />
+                          </label>
+                          <label>
+                            Status
+                            <select
+                              value={incidentForm.status}
+                              onChange={(e) =>
+                                setIncidentForm((f) => ({
+                                  ...f,
+                                  status: e.target.value as
+                                    | "degraded"
+                                    | "down",
+                                }))
+                              }
+                            >
+                              <option value="degraded">Degraded</option>
+                              <option value="down">Down</option>
+                            </select>
+                          </label>
 
-                    {announcement?.enabled ? (
-                      <div
-                        className={`announcement-preview tone-${announcement.tone}`}
-                      >
-                        <p className="announcement-label">
-                          Current announcement ({announcement.tone})
-                        </p>
-                        <p className="announcement-text">{announcement.message}</p>
-                        <p className="announcement-meta">
-                          Updated {formatRelative(announcement.updatedAt)}
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="admin-empty">
-                        <p>No active announcement</p>
-                        <span>Configure one from the editor.</span>
-                      </div>
-                    )}
-                  </section>
-
-                  <aside className="admin-editor">
-                    <form onSubmit={onAnnouncementSubmit}>
-                      <div className="editor-head">
-                        <div>
-                          <p className="editor-kicker">Announcement</p>
-                          <h2>Manage notice</h2>
+                          <div className="maint-targets">
+                            <p className="form-label">Affected services</p>
+                            <div className="service-check-grid">
+                              {services.map((service) => (
+                                <label key={service.id} className="check-row">
+                                  <input
+                                    type="checkbox"
+                                    checked={incidentForm.serviceIds.includes(
+                                      service.id,
+                                    )}
+                                    onChange={() =>
+                                      toggleIncidentService(service.id)
+                                    }
+                                  />
+                                  {service.name}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="form-stack">
-                        <label className="check-row">
-                          <input
-                            type="checkbox"
-                            checked={announcementForm.enabled}
-                            onChange={(e) =>
-                              setAnnouncementForm((f) => ({
-                                ...f,
-                                enabled: e.target.checked,
-                              }))
-                            }
-                          />
-                          Enabled (visible to public)
-                        </label>
-                        <label>
-                          Tone
-                          <select
-                            value={announcementForm.tone}
-                            onChange={(e) =>
-                              setAnnouncementForm((f) => ({
-                                ...f,
-                                tone: e.target.value as "info" | "warn",
-                              }))
-                            }
-                          >
-                            <option value="info">Info</option>
-                            <option value="warn">Warning</option>
-                          </select>
-                        </label>
-                        <label>
-                          Message
-                          <textarea
-                            value={announcementForm.message}
-                            onChange={(e) =>
-                              setAnnouncementForm((f) => ({
-                                ...f,
-                                message: e.target.value,
-                              }))
-                            }
-                            placeholder="We're working on something exciting…"
-                            rows={4}
-                            required
-                          />
-                        </label>
-                      </div>
-
-                      {announcementError ? (
-                        <p className="form-error">{announcementError}</p>
-                      ) : null}
-                      <div className="form-row">
+                        {incidentError ? (
+                          <p className="form-error">{incidentError}</p>
+                        ) : null}
                         <button
                           type="submit"
-                          className="primary-btn"
+                          className="primary-btn primary-btn-block"
                           disabled={busy}
                         >
-                          {busy ? "Saving…" : "Save"}
+                          {busy ? "Creating…" : "Create incident"}
                         </button>
-                        <button
-                          type="button"
-                          className="ghost-btn"
-                          onClick={clearAnnouncement}
-                          disabled={busy}
+                      </form>
+                    </aside>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="notice"
+                    className="admin-workspace"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.28 }}
+                  >
+                    <section className="admin-stream">
+                      {announcement?.enabled ? (
+                        <div
+                          className={`announcement-preview tone-${announcement.tone}`}
                         >
-                          Clear
-                        </button>
-                      </div>
-                    </form>
-                  </aside>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                          <p className="announcement-label">
+                            Current announcement ({announcement.tone})
+                          </p>
+                          <p className="announcement-text">
+                            {announcement.message}
+                          </p>
+                          <p className="announcement-meta">
+                            Updated {formatRelative(announcement.updatedAt)}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="admin-empty">
+                          <p>No active announcement</p>
+                          <span>Configure one from the editor.</span>
+                        </div>
+                      )}
+                    </section>
+
+                    <aside className="admin-editor">
+                      <form onSubmit={onAnnouncementSubmit}>
+                        <div className="editor-head">
+                          <div>
+                            <p className="editor-kicker">Announcement</p>
+                            <h2>Manage notice</h2>
+                          </div>
+                        </div>
+
+                        <div className="form-stack">
+                          <label className="check-row">
+                            <input
+                              type="checkbox"
+                              checked={announcementForm.enabled}
+                              onChange={(e) =>
+                                setAnnouncementForm((f) => ({
+                                  ...f,
+                                  enabled: e.target.checked,
+                                }))
+                              }
+                            />
+                            Enabled (visible to public)
+                          </label>
+                          <label>
+                            Tone
+                            <select
+                              value={announcementForm.tone}
+                              onChange={(e) =>
+                                setAnnouncementForm((f) => ({
+                                  ...f,
+                                  tone: e.target.value as "info" | "warn",
+                                }))
+                              }
+                            >
+                              <option value="info">Info</option>
+                              <option value="warn">Warning</option>
+                            </select>
+                          </label>
+                          <label>
+                            Message
+                            <textarea
+                              value={announcementForm.message}
+                              onChange={(e) =>
+                                setAnnouncementForm((f) => ({
+                                  ...f,
+                                  message: e.target.value,
+                                }))
+                              }
+                              placeholder="We're working on something exciting…"
+                              rows={4}
+                              required
+                            />
+                          </label>
+                        </div>
+
+                        {announcementError ? (
+                          <p className="form-error">{announcementError}</p>
+                        ) : null}
+                        <div className="form-actions">
+                          <button
+                            type="submit"
+                            className="primary-btn"
+                            disabled={busy}
+                          >
+                            {busy ? "Saving…" : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-btn"
+                            onClick={clearAnnouncement}
+                            disabled={busy}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </form>
+                    </aside>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </main>
           </motion.div>
         )}
       </AnimatePresence>
