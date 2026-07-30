@@ -12,7 +12,7 @@ export function createSessionToken() {
 
 export function verifyPassword(password: string) {
   const expected = getAdminPassword();
-  const a = Buffer.from(password);
+  const a = Buffer.from(password.trim());
   const b = Buffer.from(expected);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);

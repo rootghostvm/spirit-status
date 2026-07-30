@@ -13,7 +13,8 @@ export const STATUS_TITLE =
   process.env.NEXT_PUBLIC_STATUS_TITLE ?? "System Status";
 
 export function getAdminPassword() {
-  return process.env.ADMIN_PASSWORD || "changeme";
+  const value = process.env.ADMIN_PASSWORD?.trim();
+  return value || "changeme";
 }
 
 export function getAdminSecret() {
