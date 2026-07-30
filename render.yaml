@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: spirit-status
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/status
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_SECRET
+        generateValue: true
+      - key: CHECK_INTERVAL_MS
+        value: "60000"
+      - key: CHECK_TIMEOUT_MS
+        value: "10000"
+      - key: CHECK_RETRIES
+        value: "1"
+      - key: NEXT_PUBLIC_BRAND_NAME
+        value: SpiritHost
+      - key: NEXT_PUBLIC_STATUS_TITLE
+        value: System Status

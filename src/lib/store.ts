@@ -1,0 +1,686 @@
+import { promises as fs } from "fs";
+import path from "path";
+import { randomUUID } from "crypto";
+import type {
+  Announcement,
+  CheckResult,
+  CheckMethod,
+  DayBucket,
+  Incident,
+  IncidentUpdate,
+  IncidentUpdateStatus,
+  Maintenance,
+  Service,
+  StoreData,
+} from "./types";
+import {
+  DAILY_LIMIT,
+  HISTORY_LIMIT,
+  INCIDENT_LIMIT,
+  MAINTENANCE_LIMIT,
+  STORE_VERSION,
+} from "./config";
+import { dateKey } from "./format";
+import { isServiceUnderMaintenance } from "./maintenance";
+
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(process.cwd(), "data");
+const STORE_PATH = path.join(DATA_DIR, "store.json");
+
+function defaultStore(): StoreData {
+  const now = new Date().toISOString();
+  const samples: Service[] = [
+    {
+      id: randomUUID(),
+      name: "Main Website",
+      url: "https://example.com",
+      description: "Primary public site",
+      group: "Websites",
+      sortOrder: 0,
+      enabled: true,
+      method: "GET",
+      expectedStatusCodes: [],
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+
+  return {
+    version: STORE_VERSION,
+    services: samples,
+    latest: {},
+    history: {},
+    daily: {},
+    incidents: [],
+    maintenances: [],
+    announcement: null,
+    lastCheckAt: null,
+  };
+}
+
+function normalizeService(raw: Partial<Service>, index: number): Service {
+  const now = new Date().toISOString();
+  return {
+    id: raw.id || randomUUID(),
+    name: (raw.name || "Untitled").trim(),
+    url: (raw.url || "https://example.com").trim(),
+    description: (raw.description || "").trim(),
+    group: (raw.group || "General").trim() || "General",
+    sortOrder: typeof raw.sortOrder === "number" ? raw.sortOrder : index,
+    enabled: raw.enabled ?? true,
+    method: raw.method === "HEAD" ? "HEAD" : "GET",
+    expectedStatusCodes: Array.isArray(raw.expectedStatusCodes)
+      ? raw.expectedStatusCodes.filter((n) => Number.isFinite(n))
+      : [],
+    createdAt: raw.createdAt || now,
+    updatedAt: raw.updatedAt || now,
+  };
+}
+
+function normalizeStore(raw: Partial<StoreData> & Record<string, unknown>): StoreData {
+  const services = Array.isArray(raw.services)
+    ? raw.services.map((s, i) => normalizeService(s as Partial<Service>, i))
+    : [];
+
+  const history = (raw.history as StoreData["history"]) ?? {};
+  let daily = (raw.daily as StoreData["daily"]) ?? {};
+
+  // Backfill daily buckets from detailed history when missing.
+  if (!raw.daily || Object.keys(daily).length === 0) {
+    daily = {};
+    for (const [serviceId, checks] of Object.entries(history)) {
+      let buckets: DayBucket[] = [];
+      for (const check of checks) {
+        buckets = bumpDaily(buckets, check.status, check.checkedAt);
+      }
+      daily[serviceId] = buckets;
+    }
+  }
+
+  return {
+    version: STORE_VERSION,
+    services,
+    latest: (raw.latest as StoreData["latest"]) ?? {},
+    history,
+    daily,
+    incidents: Array.isArray(raw.incidents)
+      ? (raw.incidents as Partial<Incident>[]).map(normalizeIncident)
+      : [],
+    maintenances: Array.isArray(raw.maintenances)
+      ? (raw.maintenances as Maintenance[]).map(normalizeMaintenance)
+      : [],
+    announcement: normalizeAnnouncement(raw.announcement),
+    lastCheckAt: (raw.lastCheckAt as string | null) ?? null,
+  };
+}
+
+function normalizeIncident(raw: Partial<Incident>): Incident {
+  const now = new Date().toISOString();
+  const serviceId = raw.serviceId ?? null;
+  const serviceIds = Array.isArray(raw.serviceIds)
+    ? raw.serviceIds
+    : serviceId
+      ? [serviceId]
+      : [];
+
+  return {
+    id: raw.id || randomUUID(),
+    serviceId,
+    serviceIds,
+    serviceName: (raw.serviceName || "Service").trim(),
+    status: raw.status === "degraded" ? "degraded" : "down",
+    startedAt: raw.startedAt || now,
+    resolvedAt: raw.resolvedAt ?? null,
+    message: (raw.message || "").trim(),
+    source: raw.source === "manual" ? "manual" : "auto",
+    updates: Array.isArray(raw.updates)
+      ? raw.updates.map((u) => ({
+          id: u.id || randomUUID(),
+          at: u.at || now,
+          status: u.status || "update",
+          message: (u.message || "").trim(),
+        }))
+      : [],
+  };
+}
+
+function normalizeAnnouncement(
+  raw: unknown,
+): Announcement | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Partial<Announcement>;
+  if (!value.message?.trim()) return null;
+  return {
+    enabled: value.enabled ?? false,
+    message: value.message.trim(),
+    tone: value.tone === "warn" ? "warn" : "info",
+    updatedAt: value.updatedAt || new Date().toISOString(),
+  };
+}
+
+function normalizeMaintenance(raw: Partial<Maintenance>): Maintenance {
+  const now = new Date().toISOString();
+  return {
+    id: raw.id || randomUUID(),
+    title: (raw.title || "Scheduled maintenance").trim(),
+    message: (raw.message || "").trim(),
+    startsAt: raw.startsAt || now,
+    endsAt: raw.endsAt || now,
+    serviceIds: Array.isArray(raw.serviceIds) ? raw.serviceIds : [],
+    createdAt: raw.createdAt || now,
+    updatedAt: raw.updatedAt || now,
+  };
+}
+
+let writeQueue: Promise<void> = Promise.resolve();
+
+async function ensureStore(): Promise<StoreData> {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try {
+    const raw = await fs.readFile(STORE_PATH, "utf8");
+    const parsed = JSON.parse(raw) as Partial<StoreData>;
+    const normalized = normalizeStore(parsed);
+    if (
+      parsed.version !== STORE_VERSION ||
+      !("daily" in parsed) ||
+      !("incidents" in parsed) ||
+      !("maintenances" in parsed) ||
+      !("announcement" in parsed)
+    ) {
+      await persist(normalized);
+    }
+    return normalized;
+  } catch {
+    const store = defaultStore();
+    await persist(store);
+    return store;
+  }
+}
+
+async function persist(store: StoreData) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  const tmp = `${STORE_PATH}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(store, null, 2), "utf8");
+  try {
+    await fs.rename(tmp, STORE_PATH);
+  } catch {
+    await fs.copyFile(tmp, STORE_PATH);
+    await fs.unlink(tmp).catch(() => undefined);
+  }
+}
+
+function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(fn, fn);
+  writeQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+export async function readStore(): Promise<StoreData> {
+  return enqueue(() => ensureStore());
+}
+
+export async function updateStore(
+  mutator: (store: StoreData) => void | Promise<void>,
+): Promise<StoreData> {
+  return enqueue(async () => {
+    const store = await ensureStore();
+    await mutator(store);
+    await persist(store);
+    return store;
+  });
+}
+
+export type ServiceInput = {
+  name: string;
+  url: string;
+  description?: string;
+  group?: string;
+  enabled?: boolean;
+  method?: CheckMethod;
+  expectedStatusCodes?: number[];
+  sortOrder?: number;
+};
+
+export async function createService(input: ServiceInput): Promise<Service> {
+  const now = new Date().toISOString();
+  let created!: Service;
+
+  await updateStore((store) => {
+    const maxOrder = store.services.reduce(
+      (max, s) => Math.max(max, s.sortOrder),
+      -1,
+    );
+    created = {
+      id: randomUUID(),
+      name: input.name.trim(),
+      url: input.url.trim(),
+      description: (input.description ?? "").trim(),
+      group: (input.group ?? "General").trim() || "General",
+      sortOrder: input.sortOrder ?? maxOrder + 1,
+      enabled: input.enabled ?? true,
+      method: input.method === "HEAD" ? "HEAD" : "GET",
+      expectedStatusCodes: input.expectedStatusCodes ?? [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.services.push(created);
+  });
+
+  return created;
+}
+
+export async function updateService(
+  id: string,
+  patch: Partial<ServiceInput>,
+): Promise<Service | null> {
+  let updated: Service | null = null;
+
+  await updateStore((store) => {
+    const service = store.services.find((s) => s.id === id);
+    if (!service) return;
+    if (patch.name !== undefined) service.name = patch.name.trim();
+    if (patch.url !== undefined) service.url = patch.url.trim();
+    if (patch.description !== undefined)
+      service.description = patch.description.trim();
+    if (patch.group !== undefined)
+      service.group = patch.group.trim() || "General";
+    if (patch.enabled !== undefined) service.enabled = patch.enabled;
+    if (patch.method !== undefined)
+      service.method = patch.method === "HEAD" ? "HEAD" : "GET";
+    if (patch.expectedStatusCodes !== undefined)
+      service.expectedStatusCodes = patch.expectedStatusCodes;
+    if (patch.sortOrder !== undefined) service.sortOrder = patch.sortOrder;
+    service.updatedAt = new Date().toISOString();
+    updated = { ...service };
+  });
+
+  return updated;
+}
+
+export async function deleteService(id: string) {
+  let removed = false;
+  await updateStore((store) => {
+    const before = store.services.length;
+    store.services = store.services.filter((s) => s.id !== id);
+    removed = store.services.length < before;
+    delete store.latest[id];
+    delete store.history[id];
+    delete store.daily[id];
+    store.incidents = store.incidents.filter((i) => i.serviceId !== id);
+    for (const m of store.maintenances) {
+      m.serviceIds = m.serviceIds.filter((sid) => sid !== id);
+    }
+  });
+  return removed;
+}
+
+export type MaintenanceInput = {
+  title: string;
+  message?: string;
+  startsAt: string;
+  endsAt: string;
+  serviceIds?: string[];
+};
+
+function assertMaintenanceWindow(startsAt: string, endsAt: string) {
+  const start = new Date(startsAt).getTime();
+  const end = new Date(endsAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) {
+    throw new Error("Invalid maintenance dates");
+  }
+  if (end <= start) {
+    throw new Error("End time must be after start time");
+  }
+}
+
+export async function createMaintenance(
+  input: MaintenanceInput,
+): Promise<Maintenance> {
+  assertMaintenanceWindow(input.startsAt, input.endsAt);
+  const now = new Date().toISOString();
+  let created!: Maintenance;
+
+  await updateStore((store) => {
+    created = {
+      id: randomUUID(),
+      title: input.title.trim(),
+      message: (input.message ?? "").trim(),
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      serviceIds: input.serviceIds ?? [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.maintenances.unshift(created);
+    store.maintenances = store.maintenances.slice(0, MAINTENANCE_LIMIT);
+  });
+
+  return created;
+}
+
+export async function updateMaintenance(
+  id: string,
+  patch: Partial<MaintenanceInput>,
+): Promise<Maintenance | null> {
+  const store = await readStore();
+  const existing = store.maintenances.find((m) => m.id === id);
+  if (!existing) return null;
+
+  const nextStarts = patch.startsAt ?? existing.startsAt;
+  const nextEnds = patch.endsAt ?? existing.endsAt;
+  assertMaintenanceWindow(nextStarts, nextEnds);
+
+  let updated: Maintenance | null = null;
+
+  await updateStore((current) => {
+    const item = current.maintenances.find((m) => m.id === id);
+    if (!item) return;
+    if (patch.title !== undefined) item.title = patch.title.trim();
+    if (patch.message !== undefined) item.message = patch.message.trim();
+    if (patch.startsAt !== undefined) item.startsAt = patch.startsAt;
+    if (patch.endsAt !== undefined) item.endsAt = patch.endsAt;
+    if (patch.serviceIds !== undefined) item.serviceIds = patch.serviceIds;
+    item.updatedAt = new Date().toISOString();
+    updated = { ...item };
+  });
+
+  return updated;
+}
+
+export async function deleteMaintenance(id: string) {
+  let removed = false;
+  await updateStore((store) => {
+    const before = store.maintenances.length;
+    store.maintenances = store.maintenances.filter((m) => m.id !== id);
+    removed = store.maintenances.length < before;
+  });
+  return removed;
+}
+
+export async function reorderServices(orderedIds: string[]) {
+  await updateStore((store) => {
+    const map = new Map(store.services.map((s) => [s.id, s]));
+    orderedIds.forEach((id, index) => {
+      const service = map.get(id);
+      if (service) service.sortOrder = index;
+    });
+  });
+}
+
+function bumpDaily(
+  daily: DayBucket[] | undefined,
+  status: CheckResult["status"],
+  when: string,
+): DayBucket[] {
+  const key = dateKey(new Date(when));
+  const list = [...(daily ?? [])];
+  let bucket = list.find((d) => d.date === key);
+  if (!bucket) {
+    bucket = {
+      date: key,
+      operational: 0,
+      degraded: 0,
+      down: 0,
+      unknown: 0,
+    };
+    list.push(bucket);
+  }
+  bucket[status] += 1;
+  list.sort((a, b) => a.date.localeCompare(b.date));
+  return list.slice(-DAILY_LIMIT);
+}
+
+function syncIncidents(
+  store: StoreData,
+  service: Service,
+  previous: CheckResult | undefined,
+  next: CheckResult,
+) {
+  const wasBad =
+    previous?.status === "degraded" || previous?.status === "down";
+  const isBad = next.status === "degraded" || next.status === "down";
+  const open = store.incidents.find(
+    (i) =>
+      !i.resolvedAt &&
+      (i.serviceId === service.id || i.serviceIds.includes(service.id)),
+  );
+
+  if (isBad && !open) {
+    const badStatus = next.status as "degraded" | "down";
+    const message =
+      next.error ||
+      (next.statusCode
+        ? `HTTP ${next.statusCode}`
+        : `${service.name} became ${next.status}`);
+    store.incidents.unshift({
+      id: randomUUID(),
+      serviceId: service.id,
+      serviceIds: [service.id],
+      serviceName: service.name,
+      status: badStatus,
+      startedAt: next.checkedAt,
+      resolvedAt: null,
+      message,
+      source: "auto",
+      updates: [
+        {
+          id: randomUUID(),
+          at: next.checkedAt,
+          status: "investigating",
+          message,
+        },
+      ],
+    });
+  } else if (isBad && open && open.source === "auto") {
+    if (open.status !== next.status) {
+      open.status = next.status as "degraded" | "down";
+    }
+    open.message =
+      next.error ||
+      (next.statusCode
+        ? `HTTP ${next.statusCode}`
+        : `${service.name} is ${next.status}`);
+  } else if (wasBad && !isBad && open && open.source === "auto") {
+    open.resolvedAt = next.checkedAt;
+    open.updates.push({
+      id: randomUUID(),
+      at: next.checkedAt,
+      status: "resolved",
+      message: `${service.name} recovered`,
+    });
+  }
+
+  store.incidents = store.incidents.slice(0, INCIDENT_LIMIT);
+}
+
+export async function recordCheckResults(
+  results: Array<{ serviceId: string; result: CheckResult }>,
+) {
+  await updateStore((store) => {
+    const checkedAt = new Date().toISOString();
+    for (const { serviceId, result } of results) {
+      const service = store.services.find((s) => s.id === serviceId);
+      const previous = store.latest[serviceId];
+      store.latest[serviceId] = result;
+      const history = store.history[serviceId] ?? [];
+      history.push(result);
+      store.history[serviceId] = history.slice(-HISTORY_LIMIT);
+      store.daily[serviceId] = bumpDaily(
+        store.daily[serviceId],
+        result.status,
+        result.checkedAt,
+      );
+      const underMaintenance = isServiceUnderMaintenance(
+        serviceId,
+        store.maintenances,
+      );
+      if (service && !underMaintenance) {
+        syncIncidents(store, service, previous, result);
+      } else if (service && underMaintenance) {
+        const open = store.incidents.find(
+          (i) =>
+            !i.resolvedAt &&
+            i.source === "auto" &&
+            (i.serviceId === serviceId || i.serviceIds.includes(serviceId)),
+        );
+        if (open) {
+          open.resolvedAt = result.checkedAt;
+          open.updates.push({
+            id: randomUUID(),
+            at: result.checkedAt,
+            status: "resolved",
+            message: "Closed during scheduled maintenance",
+          });
+        }
+      }
+    }
+    store.lastCheckAt = checkedAt;
+  });
+}
+
+export function uptimePercent(
+  history: CheckResult[] | undefined,
+  windowMs = 24 * 60 * 60 * 1000,
+): number | null {
+  if (!history?.length) return null;
+  const cutoff = Date.now() - windowMs;
+  const recent = history.filter(
+    (h) => new Date(h.checkedAt).getTime() >= cutoff,
+  );
+  if (!recent.length) return null;
+  const up = recent.filter((h) => h.status === "operational").length;
+  return Math.round((up / recent.length) * 1000) / 10;
+}
+
+export function avgLatency(
+  history: CheckResult[] | undefined,
+  limit = 30,
+): number | null {
+  if (!history?.length) return null;
+  const slice = history.slice(-limit).filter((h) => h.responseMs != null);
+  if (!slice.length) return null;
+  const sum = slice.reduce((acc, h) => acc + (h.responseMs ?? 0), 0);
+  return Math.round(sum / slice.length);
+}
+
+export function sparklineValues(
+  history: CheckResult[] | undefined,
+  points = 24,
+): Array<number | null> {
+  if (!history?.length) return [];
+  return history.slice(-points).map((h) => {
+    if (h.status !== "operational" || h.responseMs == null) return null;
+    return Math.min(h.responseMs, 5000);
+  });
+}
+
+export async function createManualIncident(input: {
+  title: string;
+  message: string;
+  status?: "degraded" | "down";
+  serviceIds?: string[];
+}): Promise<Incident> {
+  const now = new Date().toISOString();
+  let created!: Incident;
+
+  await updateStore((store) => {
+    const ids = input.serviceIds ?? [];
+    const names = ids
+      .map((id) => store.services.find((s) => s.id === id)?.name)
+      .filter((n): n is string => Boolean(n));
+    const serviceName =
+      names.length === 0
+        ? input.title.trim()
+        : names.length === 1
+          ? names[0]
+          : `${names[0]} +${names.length - 1}`;
+
+    created = {
+      id: randomUUID(),
+      serviceId: ids[0] ?? null,
+      serviceIds: ids,
+      serviceName,
+      status: input.status ?? "down",
+      startedAt: now,
+      resolvedAt: null,
+      message: input.message.trim() || input.title.trim(),
+      source: "manual",
+      updates: [
+        {
+          id: randomUUID(),
+          at: now,
+          status: "investigating",
+          message: input.message.trim() || input.title.trim(),
+        },
+      ],
+    };
+    store.incidents.unshift(created);
+    store.incidents = store.incidents.slice(0, INCIDENT_LIMIT);
+  });
+
+  return created;
+}
+
+export async function addIncidentUpdate(
+  id: string,
+  input: { message: string; status: IncidentUpdateStatus },
+): Promise<Incident | null> {
+  let updated: Incident | null = null;
+  const now = new Date().toISOString();
+
+  await updateStore((store) => {
+    const incident = store.incidents.find((i) => i.id === id);
+    if (!incident) return;
+    const entry: IncidentUpdate = {
+      id: randomUUID(),
+      at: now,
+      status: input.status,
+      message: input.message.trim(),
+    };
+    incident.updates.push(entry);
+    incident.message = entry.message;
+    if (input.status === "resolved") {
+      incident.resolvedAt = now;
+    } else if (incident.resolvedAt) {
+      incident.resolvedAt = null;
+    }
+    updated = {
+      ...incident,
+      updates: [...incident.updates],
+    };
+  });
+
+  return updated;
+}
+
+export async function resolveIncident(id: string, message?: string) {
+  return addIncidentUpdate(id, {
+    status: "resolved",
+    message: message?.trim() || "Incident resolved",
+  });
+}
+
+export async function setAnnouncement(
+  input: { message: string; tone?: "info" | "warn"; enabled?: boolean } | null,
+): Promise<Announcement | null> {
+  let next: Announcement | null = null;
+  await updateStore((store) => {
+    if (!input || !input.message.trim()) {
+      store.announcement = null;
+      next = null;
+      return;
+    }
+    store.announcement = {
+      enabled: input.enabled ?? true,
+      message: input.message.trim(),
+      tone: input.tone === "warn" ? "warn" : "info",
+      updatedAt: new Date().toISOString(),
+    };
+    next = { ...store.announcement };
+  });
+  return next;
+}
