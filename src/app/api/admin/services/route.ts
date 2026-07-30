@@ -65,7 +65,7 @@ export async function POST(request: Request) {
     expectedStatusCodes: body.expectedStatusCodes,
   });
 
-  void runChecks([service.id]);
+  await runChecks([service.id]);
   const store = await readStore();
   return NextResponse.json(
     {

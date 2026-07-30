@@ -29,8 +29,6 @@ const DATA_DIR = process.env.DATA_DIR
   : path.join(process.cwd(), "data");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
 
-let memoryStore: StoreData | null = null;
-
 function defaultStore(): StoreData {
   return {
     version: STORE_VERSION,
@@ -178,6 +176,9 @@ function normalizeMaintenance(raw: Partial<Maintenance>): Maintenance {
 }
 
 let writeQueue: Promise<void> = Promise.resolve();
+let memoryStore: StoreData | null = null;
+let r2FlushTimer: ReturnType<typeof setTimeout> | null = null;
+let r2Dirty = false;
 
 async function loadFromLocalFile(): Promise<StoreData | null> {
   try {
@@ -186,6 +187,24 @@ async function loadFromLocalFile(): Promise<StoreData | null> {
   } catch {
     return null;
   }
+}
+
+async function flushR2() {
+  if (!isR2Configured() || !memoryStore || !r2Dirty) return;
+  r2Dirty = false;
+  await writeR2Object(JSON.stringify(memoryStore, null, 2));
+}
+
+function scheduleR2Flush() {
+  if (r2FlushTimer) return;
+  r2FlushTimer = setTimeout(() => {
+    r2FlushTimer = null;
+    void flushR2().catch((error) => {
+      console.error("[spirit-status] R2 flush failed", error);
+      r2Dirty = true;
+      scheduleR2Flush();
+    });
+  }, 1_500);
 }
 
 async function ensureStore(): Promise<StoreData> {
@@ -226,7 +245,8 @@ async function persist(store: StoreData) {
   const body = JSON.stringify(store, null, 2);
 
   if (isR2Configured()) {
-    await writeR2Object(body);
+    r2Dirty = true;
+    scheduleR2Flush();
     return;
   }
 

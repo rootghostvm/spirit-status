@@ -56,7 +56,7 @@ export function StatusPageClient({
     if (!mounted) return;
     const id = window.setInterval(() => {
       void refresh();
-    }, 12_000);
+    }, 5_000);
     return () => window.clearInterval(id);
   }, [mounted, refresh]);
 

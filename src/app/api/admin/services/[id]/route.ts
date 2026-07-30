@@ -43,7 +43,7 @@ export async function PATCH(request: Request, { params }: Params) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (service.enabled) void runChecks([service.id]);
+  if (service.enabled) await runChecks([service.id]);
   return NextResponse.json({ service });
 }
 

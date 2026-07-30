@@ -39,6 +39,8 @@ declare global {
         running: boolean;
         lastStartedAt: number | null;
         nextCheckAt: number | null;
+        pendingAll: boolean;
+        pendingServiceIds: string[] | null;
       }
     | undefined;
 }
@@ -50,6 +52,8 @@ function monitorState() {
       running: false,
       lastStartedAt: null,
       nextCheckAt: null,
+      pendingAll: false,
+      pendingServiceIds: null,
     };
   }
   return globalThis.__spiritMonitor;
@@ -145,6 +149,13 @@ export async function checkService(service: Service): Promise<CheckResult> {
 export async function runChecks(serviceIds?: string[]) {
   const state = monitorState();
   if (state.running) {
+    if (serviceIds?.length) {
+      const pending = new Set(state.pendingServiceIds ?? []);
+      for (const id of serviceIds) pending.add(id);
+      state.pendingServiceIds = [...pending];
+    } else {
+      state.pendingAll = true;
+    }
     return { ran: false, checked: 0 };
   }
   state.running = true;
@@ -173,6 +184,15 @@ export async function runChecks(serviceIds?: string[]) {
   } finally {
     state.running = false;
     state.nextCheckAt = Date.now() + CHECK_INTERVAL_MS;
+    const pendingAll = state.pendingAll;
+    const pendingIds = state.pendingServiceIds;
+    state.pendingAll = false;
+    state.pendingServiceIds = null;
+    if (pendingAll) {
+      void runChecks();
+    } else if (pendingIds?.length) {
+      void runChecks(pendingIds);
+    }
   }
 }
 
