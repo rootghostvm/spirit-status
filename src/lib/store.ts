@@ -22,11 +22,14 @@ import {
 } from "./config";
 import { dateKey } from "./format";
 import { isServiceUnderMaintenance } from "./maintenance";
+import { isR2Configured, readR2Object, writeR2Object } from "./r2";
 
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(process.cwd(), "data");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
+
+let memoryStore: StoreData | null = null;
 
 function defaultStore(): StoreData {
   return {
@@ -176,33 +179,60 @@ function normalizeMaintenance(raw: Partial<Maintenance>): Maintenance {
 
 let writeQueue: Promise<void> = Promise.resolve();
 
-async function ensureStore(): Promise<StoreData> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
+async function loadFromLocalFile(): Promise<StoreData | null> {
   try {
     const raw = await fs.readFile(STORE_PATH, "utf8");
-    const parsed = JSON.parse(raw) as Partial<StoreData>;
-    const normalized = normalizeStore(parsed);
-    if (
-      parsed.version !== STORE_VERSION ||
-      !("daily" in parsed) ||
-      !("incidents" in parsed) ||
-      !("maintenances" in parsed) ||
-      !("announcement" in parsed)
-    ) {
-      await persist(normalized);
-    }
-    return normalized;
+    return normalizeStore(JSON.parse(raw) as Partial<StoreData>);
   } catch {
-    const store = defaultStore();
-    await persist(store);
-    return store;
+    return null;
   }
 }
 
+async function ensureStore(): Promise<StoreData> {
+  if (memoryStore) return memoryStore;
+
+  let loaded: StoreData | null = null;
+
+  if (isR2Configured()) {
+    const raw = await readR2Object();
+    if (raw) {
+      loaded = normalizeStore(JSON.parse(raw) as Partial<StoreData>);
+    }
+  } else {
+    loaded = await loadFromLocalFile();
+  }
+
+  if (!loaded) {
+    loaded = defaultStore();
+    await persist(loaded);
+    return loaded;
+  }
+
+  memoryStore = loaded;
+  if (
+    loaded.version !== STORE_VERSION ||
+    !("daily" in loaded) ||
+    !("incidents" in loaded) ||
+    !("maintenances" in loaded) ||
+    !("announcement" in loaded)
+  ) {
+    await persist(loaded);
+  }
+  return loaded;
+}
+
 async function persist(store: StoreData) {
+  memoryStore = store;
+  const body = JSON.stringify(store, null, 2);
+
+  if (isR2Configured()) {
+    await writeR2Object(body);
+    return;
+  }
+
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmp = `${STORE_PATH}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(store, null, 2), "utf8");
+  await fs.writeFile(tmp, body, "utf8");
   try {
     await fs.rename(tmp, STORE_PATH);
   } catch {

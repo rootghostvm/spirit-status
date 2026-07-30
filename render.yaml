@@ -24,3 +24,13 @@ services:
         value: SpiritHost
       - key: NEXT_PUBLIC_STATUS_TITLE
         value: System Status
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_OBJECT_KEY
+        value: store.json
