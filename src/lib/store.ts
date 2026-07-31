@@ -12,6 +12,9 @@ import type {
   Maintenance,
   Service,
   StoreData,
+  WebhookEvent,
+  WebhookEventFlags,
+  WebhookSettings,
 } from "./types";
 import {
   DAILY_LIMIT,
@@ -23,6 +26,12 @@ import {
 import { dateKey } from "./format";
 import { isServiceUnderMaintenance } from "./maintenance";
 import { isR2Configured, readR2Object, writeR2Object } from "./r2";
+import {
+  defaultWebhookSettings,
+  maskWebhookUrl,
+  normalizeWebhookSettings,
+  queueWebhookEvents,
+} from "./webhooks";
 
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
@@ -39,6 +48,7 @@ function defaultStore(): StoreData {
     incidents: [],
     maintenances: [],
     announcement: null,
+    webhook: defaultWebhookSettings(),
     lastCheckAt: null,
   };
 }
@@ -113,6 +123,7 @@ function normalizeStore(raw: Partial<StoreData> & Record<string, unknown>): Stor
       ? (raw.maintenances as Maintenance[]).map(normalizeMaintenance)
       : [],
     announcement: normalizeAnnouncement(raw.announcement),
+    webhook: normalizeWebhookSettings(raw.webhook),
     lastCheckAt: (raw.lastCheckAt as string | null) ?? null,
   };
 }
@@ -247,7 +258,8 @@ async function ensureStore(): Promise<StoreData> {
     !("daily" in loaded) ||
     !("incidents" in loaded) ||
     !("maintenances" in loaded) ||
-    !("announcement" in loaded)
+    !("announcement" in loaded) ||
+    !("webhook" in loaded)
   ) {
     await persist(loaded);
   }
@@ -433,8 +445,10 @@ export async function createMaintenance(
   assertMaintenanceWindow(input.startsAt, input.endsAt);
   const now = new Date().toISOString();
   let created!: Maintenance;
+  let webhook = defaultWebhookSettings();
 
   await updateStore((store) => {
+    webhook = store.webhook;
     created = {
       id: randomUUID(),
       title: input.title.trim(),
@@ -448,6 +462,25 @@ export async function createMaintenance(
     store.maintenances.unshift(created);
     store.maintenances = store.maintenances.slice(0, MAINTENANCE_LIMIT);
   });
+
+  queueWebhookEvents(webhook, [
+    {
+      type: "maintenance.changed",
+      title: `Maintenance scheduled: ${created.title}`,
+      description: created.message || "A maintenance window was scheduled.",
+      fields: [
+        { name: "Starts", value: created.startsAt, inline: true },
+        { name: "Ends", value: created.endsAt, inline: true },
+        {
+          name: "Scope",
+          value: created.serviceIds.length
+            ? `${created.serviceIds.length} service(s)`
+            : "All services",
+          inline: true,
+        },
+      ],
+    },
+  ]);
 
   return created;
 }
@@ -465,8 +498,10 @@ export async function updateMaintenance(
   assertMaintenanceWindow(nextStarts, nextEnds);
 
   let updated: Maintenance | null = null;
+  let webhook = defaultWebhookSettings();
 
   await updateStore((current) => {
+    webhook = current.webhook;
     const item = current.maintenances.find((m) => m.id === id);
     if (!item) return;
     if (patch.title !== undefined) item.title = patch.title.trim();
@@ -478,16 +513,45 @@ export async function updateMaintenance(
     updated = { ...item };
   });
 
+  if (updated) {
+    const item = updated as Maintenance;
+    queueWebhookEvents(webhook, [
+      {
+        type: "maintenance.changed",
+        title: `Maintenance updated: ${item.title}`,
+        description: item.message || "Maintenance window was updated.",
+        fields: [
+          { name: "Starts", value: item.startsAt, inline: true },
+          { name: "Ends", value: item.endsAt, inline: true },
+        ],
+      },
+    ]);
+  }
+
   return updated;
 }
 
 export async function deleteMaintenance(id: string) {
   let removed = false;
+  let title = "Maintenance";
+  let webhook = defaultWebhookSettings();
   await updateStore((store) => {
+    webhook = store.webhook;
+    const existing = store.maintenances.find((m) => m.id === id);
+    if (existing) title = existing.title;
     const before = store.maintenances.length;
     store.maintenances = store.maintenances.filter((m) => m.id !== id);
     removed = store.maintenances.length < before;
   });
+  if (removed) {
+    queueWebhookEvents(webhook, [
+      {
+        type: "maintenance.changed",
+        title: `Maintenance removed: ${title}`,
+        description: "A maintenance window was deleted.",
+      },
+    ]);
+  }
   return removed;
 }
 
@@ -531,7 +595,8 @@ function syncIncidents(
   service: Service,
   previous: CheckResult | undefined,
   next: CheckResult,
-) {
+): WebhookEvent[] {
+  const events: WebhookEvent[] = [];
   const wasBad =
     previous?.status === "degraded" || previous?.status === "down";
   const isBad = next.status === "degraded" || next.status === "down";
@@ -548,7 +613,7 @@ function syncIncidents(
       (next.statusCode
         ? `HTTP ${next.statusCode}`
         : `${service.name} became ${next.status}`);
-    store.incidents.unshift({
+    const incident: Incident = {
       id: randomUUID(),
       serviceId: service.id,
       serviceIds: [service.id],
@@ -566,8 +631,20 @@ function syncIncidents(
           message,
         },
       ],
+    };
+    store.incidents.unshift(incident);
+    events.push({
+      type: "incident.opened",
+      title: `${service.name} is ${badStatus}`,
+      description: message,
+      fields: [
+        { name: "Service", value: service.name, inline: true },
+        { name: "Status", value: badStatus, inline: true },
+        { name: "Source", value: "auto", inline: true },
+      ],
     });
   } else if (isBad && open && open.source === "auto") {
+    const prevStatus = open.status;
     if (open.status !== next.status) {
       open.status = next.status as "degraded" | "down";
     }
@@ -576,6 +653,17 @@ function syncIncidents(
       (next.statusCode
         ? `HTTP ${next.statusCode}`
         : `${service.name} is ${next.status}`);
+    if (prevStatus !== open.status) {
+      events.push({
+        type: "incident.updated",
+        title: `${service.name} now ${open.status}`,
+        description: open.message,
+        fields: [
+          { name: "Service", value: service.name, inline: true },
+          { name: "Status", value: open.status, inline: true },
+        ],
+      });
+    }
   } else if (wasBad && !isBad && open && open.source === "auto") {
     open.resolvedAt = next.checkedAt;
     open.updates.push({
@@ -584,16 +672,30 @@ function syncIncidents(
       status: "resolved",
       message: `${service.name} recovered`,
     });
+    events.push({
+      type: "incident.resolved",
+      title: `${service.name} recovered`,
+      description: `${service.name} is operational again.`,
+      fields: [
+        { name: "Service", value: service.name, inline: true },
+        { name: "Status", value: "operational", inline: true },
+      ],
+    });
   }
 
   store.incidents = store.incidents.slice(0, INCIDENT_LIMIT);
+  return events;
 }
 
 export async function recordCheckResults(
   results: Array<{ serviceId: string; result: CheckResult }>,
   options?: { touchLastCheck?: boolean },
 ) {
+  const events: WebhookEvent[] = [];
+  let webhook = defaultWebhookSettings();
+
   await updateStore((store) => {
+    webhook = store.webhook;
     const checkedAt = new Date().toISOString();
     for (const { serviceId, result } of results) {
       const service = store.services.find((s) => s.id === serviceId);
@@ -612,7 +714,7 @@ export async function recordCheckResults(
         result.checkedAt,
       );
       if (service && !underMaintenance) {
-        syncIncidents(store, service, previous, result);
+        events.push(...syncIncidents(store, service, previous, result));
       } else if (service && underMaintenance) {
         const open = store.incidents.find(
           (i) =>
@@ -628,6 +730,15 @@ export async function recordCheckResults(
             status: "resolved",
             message: "Closed during scheduled maintenance",
           });
+          events.push({
+            type: "incident.resolved",
+            title: `${service.name} incident closed`,
+            description: "Closed during scheduled maintenance.",
+            fields: [
+              { name: "Service", value: service.name, inline: true },
+              { name: "Reason", value: "maintenance", inline: true },
+            ],
+          });
         }
       }
     }
@@ -635,6 +746,8 @@ export async function recordCheckResults(
       store.lastCheckAt = checkedAt;
     }
   });
+
+  queueWebhookEvents(webhook, events);
 }
 
 export function uptimePercent(
@@ -681,8 +794,10 @@ export async function createManualIncident(input: {
 }): Promise<Incident> {
   const now = new Date().toISOString();
   let created!: Incident;
+  let webhook = defaultWebhookSettings();
 
   await updateStore((store) => {
+    webhook = store.webhook;
     const ids = input.serviceIds ?? [];
     const names = ids
       .map((id) => store.services.find((s) => s.id === id)?.name)
@@ -717,6 +832,18 @@ export async function createManualIncident(input: {
     store.incidents = store.incidents.slice(0, INCIDENT_LIMIT);
   });
 
+  queueWebhookEvents(webhook, [
+    {
+      type: "incident.opened",
+      title: `Incident: ${created.serviceName}`,
+      description: created.message,
+      fields: [
+        { name: "Status", value: created.status, inline: true },
+        { name: "Source", value: "manual", inline: true },
+      ],
+    },
+  ]);
+
   return created;
 }
 
@@ -726,8 +853,10 @@ export async function addIncidentUpdate(
 ): Promise<Incident | null> {
   let updated: Incident | null = null;
   const now = new Date().toISOString();
+  let webhook = defaultWebhookSettings();
 
   await updateStore((store) => {
+    webhook = store.webhook;
     const incident = store.incidents.find((i) => i.id === id);
     if (!incident) return;
     const entry: IncidentUpdate = {
@@ -748,6 +877,27 @@ export async function addIncidentUpdate(
       updates: [...incident.updates],
     };
   });
+
+  if (updated) {
+    const incident = updated as Incident;
+    const type: WebhookEvent["type"] =
+      input.status === "resolved" ? "incident.resolved" : "incident.updated";
+
+    queueWebhookEvents(webhook, [
+      {
+        type,
+        title:
+          type === "incident.resolved"
+            ? `Resolved: ${incident.serviceName}`
+            : `Update: ${incident.serviceName}`,
+        description: input.message.trim(),
+        fields: [
+          { name: "Status", value: input.status, inline: true },
+          { name: "Service", value: incident.serviceName, inline: true },
+        ],
+      },
+    ]);
+  }
 
   return updated;
 }
@@ -779,8 +929,13 @@ export async function setAnnouncement(
   input: { message: string; tone?: "info" | "warn"; enabled?: boolean } | null,
 ): Promise<Announcement | null> {
   let next: Announcement | null = null;
+  let webhook = defaultWebhookSettings();
+  let cleared = false;
+
   await updateStore((store) => {
+    webhook = store.webhook;
     if (!input || !input.message.trim()) {
+      cleared = Boolean(store.announcement);
       store.announcement = null;
       next = null;
       return;
@@ -793,5 +948,72 @@ export async function setAnnouncement(
     };
     next = { ...store.announcement };
   });
+
+  if (cleared) {
+    queueWebhookEvents(webhook, [
+      {
+        type: "notice.changed",
+        title: "Notice cleared",
+        description: "The public status notice was removed.",
+      },
+    ]);
+  } else if (next) {
+    const announcement = next as Announcement;
+    queueWebhookEvents(webhook, [
+      {
+        type: "notice.changed",
+        title: announcement.enabled ? "Notice published" : "Notice saved (hidden)",
+        description: announcement.message,
+        fields: [
+          {
+            name: "Tone",
+            value: announcement.tone,
+            inline: true,
+          },
+          {
+            name: "Visible",
+            value: announcement.enabled ? "yes" : "no",
+            inline: true,
+          },
+        ],
+      },
+    ]);
+  }
+
   return next;
+}
+
+export async function setWebhookSettings(input: {
+  enabled?: boolean;
+  url?: string;
+  keepExistingUrl?: boolean;
+  events?: Partial<WebhookEventFlags>;
+}): Promise<WebhookSettings> {
+  let next = defaultWebhookSettings();
+  await updateStore((store) => {
+    const current = store.webhook ?? defaultWebhookSettings();
+    const url =
+      input.keepExistingUrl || input.url === undefined
+        ? current.url
+        : input.url.trim();
+    store.webhook = {
+      enabled: input.enabled ?? current.enabled,
+      url,
+      events: {
+        ...current.events,
+        ...(input.events ?? {}),
+      },
+    };
+    next = { ...store.webhook, events: { ...store.webhook.events } };
+  });
+  return next;
+}
+
+export function publicWebhookView(settings: WebhookSettings) {
+  return {
+    enabled: settings.enabled,
+    urlMasked: maskWebhookUrl(settings.url),
+    hasUrl: Boolean(settings.url),
+    events: { ...settings.events },
+  };
 }

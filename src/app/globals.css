@@ -1934,6 +1934,39 @@ select {
   accent-color: var(--sea);
 }
 
+.field-hint {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--ink-muted, rgba(14, 28, 43, 0.55));
+  font-weight: 400;
+}
+
+.webhook-events {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(14, 28, 43, 0.08);
+  background: rgba(255, 255, 255, 0.45);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.webhook-events legend {
+  padding: 0 0.35rem;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.admin-workspace-single {
+  grid-template-columns: 1fr;
+}
+
+.admin-editor-wide {
+  max-width: 36rem;
+}
+
 .service-check-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

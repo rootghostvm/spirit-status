@@ -83,6 +83,35 @@ export interface Announcement {
   updatedAt: string;
 }
 
+export interface WebhookEventFlags {
+  incidentOpened: boolean;
+  incidentUpdated: boolean;
+  incidentResolved: boolean;
+  maintenanceChanged: boolean;
+  noticeChanged: boolean;
+}
+
+export interface WebhookSettings {
+  enabled: boolean;
+  url: string;
+  events: WebhookEventFlags;
+}
+
+export type WebhookEventType =
+  | "incident.opened"
+  | "incident.updated"
+  | "incident.resolved"
+  | "maintenance.changed"
+  | "notice.changed";
+
+export interface WebhookEvent {
+  type: WebhookEventType;
+  title: string;
+  description: string;
+  color?: number;
+  fields?: Array<{ name: string; value: string; inline?: boolean }>;
+}
+
 export interface StoreData {
   version: number;
   services: Service[];
@@ -92,6 +121,7 @@ export interface StoreData {
   incidents: Incident[];
   maintenances: Maintenance[];
   announcement: Announcement | null;
+  webhook: WebhookSettings;
   lastCheckAt: string | null;
 }
 

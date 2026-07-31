@@ -11,6 +11,7 @@ import type {
   IncidentUpdateStatus,
   Maintenance,
   Service,
+  WebhookEventFlags,
 } from "@/lib/types";
 import {
   formatLatency,
@@ -59,7 +60,13 @@ const INCIDENT_UPDATE_STATUS_OPTIONS = [
 ] as const;
 
 type AdminService = Service & { latest?: CheckResult | null };
-type TabId = "services" | "maintenance" | "incidents" | "notice";
+type TabId = "services" | "maintenance" | "incidents" | "notice" | "alerts";
+
+type WebhookFormState = {
+  enabled: boolean;
+  url: string;
+  events: WebhookEventFlags;
+};
 
 type FormState = {
   name: string;
@@ -140,6 +147,18 @@ const emptyAnnouncementForm: AnnouncementFormState = {
   tone: "info",
 };
 
+const emptyWebhookForm: WebhookFormState = {
+  enabled: false,
+  url: "",
+  events: {
+    incidentOpened: true,
+    incidentUpdated: true,
+    incidentResolved: true,
+    maintenanceChanged: true,
+    noticeChanged: true,
+  },
+};
+
 const TAB_COPY: Record<TabId, { title: string; subtitle: string }> = {
   services: {
     title: "Services",
@@ -157,6 +176,10 @@ const TAB_COPY: Record<TabId, { title: string; subtitle: string }> = {
     title: "Notice",
     subtitle: "Public banner at the top of the status page.",
   },
+  alerts: {
+    title: "Alerts",
+    subtitle: "Discord webhook embeds for incidents, maintenance, and notices.",
+  },
 };
 
 export function AdminApp() {
@@ -172,11 +195,13 @@ export function AdminApp() {
   const [announcementError, setAnnouncementError] = useState<string | null>(
     null,
   );
+  const [webhookError, setWebhookError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [services, setServices] = useState<AdminService[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [maintenances, setMaintenances] = useState<Maintenance[]>([]);
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
+  const [webhookHasUrl, setWebhookHasUrl] = useState(false);
   const [lastCheckAt, setLastCheckAt] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<TabId>("services");
@@ -189,6 +214,8 @@ export function AdminApp() {
   const [announcementForm, setAnnouncementForm] = useState<AnnouncementFormState>(
     emptyAnnouncementForm,
   );
+  const [webhookForm, setWebhookForm] =
+    useState<WebhookFormState>(emptyWebhookForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingMaintId, setEditingMaintId] = useState<string | null>(null);
   const [addingUpdateToIncidentId, setAddingUpdateToIncidentId] = useState<
@@ -211,6 +238,12 @@ export function AdminApp() {
       incidents: Incident[];
       maintenances: Maintenance[];
       announcement: Announcement | null;
+      webhook?: {
+        enabled: boolean;
+        urlMasked: string;
+        hasUrl: boolean;
+        events: WebhookEventFlags;
+      };
       lastCheckAt: string | null;
     };
     setServices(
@@ -223,6 +256,14 @@ export function AdminApp() {
     setMaintenances(json.maintenances ?? []);
     setAnnouncement(json.announcement ?? null);
     setLastCheckAt(json.lastCheckAt);
+    if (json.webhook) {
+      setWebhookHasUrl(json.webhook.hasUrl);
+      setWebhookForm({
+        enabled: json.webhook.enabled,
+        url: json.webhook.urlMasked,
+        events: { ...emptyWebhookForm.events, ...json.webhook.events },
+      });
+    }
     if (json.announcement) {
       setAnnouncementForm({
         enabled: json.announcement.enabled,
@@ -613,6 +654,66 @@ export function AdminApp() {
     }
   }
 
+  async function onWebhookSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setWebhookError(null);
+    try {
+      const payload: {
+        enabled: boolean;
+        events: WebhookEventFlags;
+        url?: string;
+        clearUrl?: boolean;
+      } = {
+        enabled: webhookForm.enabled,
+        events: webhookForm.events,
+      };
+      if (!webhookForm.url.trim()) {
+        payload.clearUrl = true;
+      } else if (!webhookForm.url.includes("********")) {
+        payload.url = webhookForm.url.trim();
+      }
+      const res = await fetch("/api/admin/webhook", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setWebhookError(json.error ?? "Could not save webhook");
+        return;
+      }
+      await loadServices();
+      showToast("Webhook settings saved");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendWebhookTest() {
+    setBusy(true);
+    setWebhookError(null);
+    try {
+      const payload: { url?: string } = {};
+      if (webhookForm.url.trim() && !webhookForm.url.includes("********")) {
+        payload.url = webhookForm.url.trim();
+      }
+      const res = await fetch("/api/admin/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setWebhookError(json.error ?? "Test failed");
+        return;
+      }
+      showToast("Test embed sent");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleEnabled(service: AdminService) {
     setBusy(true);
     try {
@@ -946,6 +1047,14 @@ export function AdminApp() {
                   <span>Notice</span>
                   {announcement?.enabled ? <em>on</em> : null}
                 </button>
+                <button
+                  type="button"
+                  className={tab === "alerts" ? "is-active" : ""}
+                  onClick={() => setTab("alerts")}
+                >
+                  <span>Alerts</span>
+                  {webhookForm.enabled && webhookHasUrl ? <em>on</em> : null}
+                </button>
               </nav>
 
               <div className="admin-rail-stats" aria-label="Live status">
@@ -1277,6 +1386,10 @@ export function AdminApp() {
                                   <option key={group} value={group} />
                                 ))}
                               </datalist>
+                              <span className="field-hint">
+                                Same name = same public section. Multiple
+                                services can share a group.
+                              </span>
                             </label>
                             <div className="form-field">
                               <span className="form-label">Method</span>
@@ -1832,7 +1945,7 @@ export function AdminApp() {
                       </form>
                     </aside>
                   </motion.div>
-                ) : (
+                ) : tab === "notice" ? (
                   <motion.div
                     key="notice"
                     className="admin-workspace"
@@ -1951,7 +2064,124 @@ export function AdminApp() {
                       </form>
                     </aside>
                   </motion.div>
-                )}
+                ) : null}
+                {tab === "alerts" ? (
+                  <motion.div
+                    key="alerts"
+                    className="admin-workspace admin-workspace-single"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.28 }}
+                  >
+                    <aside className="admin-editor admin-editor-wide">
+                      <form onSubmit={onWebhookSubmit}>
+                        <div className="editor-head">
+                          <div>
+                            <p className="editor-kicker">Discord</p>
+                            <h2>Webhook alerts</h2>
+                          </div>
+                        </div>
+
+                        <div className="form-stack">
+                          <label className="check-row">
+                            <input
+                              type="checkbox"
+                              checked={webhookForm.enabled}
+                              onChange={(e) =>
+                                setWebhookForm((f) => ({
+                                  ...f,
+                                  enabled: e.target.checked,
+                                }))
+                              }
+                            />
+                            Enable Discord alerts
+                          </label>
+
+                          <label>
+                            Webhook URL
+                            <input
+                              type="password"
+                              autoComplete="off"
+                              value={webhookForm.url}
+                              onChange={(e) =>
+                                setWebhookForm((f) => ({
+                                  ...f,
+                                  url: e.target.value,
+                                }))
+                              }
+                              onFocus={() => {
+                                if (webhookForm.url.includes("********")) {
+                                  setWebhookForm((f) => ({ ...f, url: "" }));
+                                }
+                              }}
+                              placeholder="https://discord.com/api/webhooks/…"
+                            />
+                            <span className="field-hint">
+                              Paste a channel webhook from Discord Server
+                              Settings → Integrations. Leave blank and save to
+                              clear.
+                            </span>
+                          </label>
+
+                          <fieldset className="webhook-events">
+                            <legend>Events</legend>
+                            {(
+                              [
+                                ["incidentOpened", "Incident opened"],
+                                ["incidentUpdated", "Incident updated"],
+                                [
+                                  "incidentResolved",
+                                  "Incident resolved / online",
+                                ],
+                                ["maintenanceChanged", "Maintenance changes"],
+                                ["noticeChanged", "Notice changes"],
+                              ] as const
+                            ).map(([key, label]) => (
+                              <label key={key} className="check-row">
+                                <input
+                                  type="checkbox"
+                                  checked={webhookForm.events[key]}
+                                  onChange={(e) =>
+                                    setWebhookForm((f) => ({
+                                      ...f,
+                                      events: {
+                                        ...f.events,
+                                        [key]: e.target.checked,
+                                      },
+                                    }))
+                                  }
+                                />
+                                {label}
+                              </label>
+                            ))}
+                          </fieldset>
+                        </div>
+
+                        {webhookError ? (
+                          <p className="form-error">{webhookError}</p>
+                        ) : null}
+                        <div className="form-actions">
+                          <button
+                            type="submit"
+                            className="primary-btn"
+                            disabled={busy}
+                          >
+                            {busy ? "Saving…" : "Save alerts"}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-btn"
+                            onClick={sendWebhookTest}
+                            disabled={busy}
+                          >
+                            Send test
+                          </button>
+                        </div>
+                      </form>
+                    </aside>
+                  </motion.div>
+                ) : null}
               </AnimatePresence>
             </main>
           </motion.div>

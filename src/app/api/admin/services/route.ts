@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { createService, readStore } from "@/lib/store";
+import { createService, publicWebhookView, readStore } from "@/lib/store";
 import { runChecks, startMonitor } from "@/lib/checker";
 import { assertSafeProbeUrl } from "@/lib/format";
 import type { CheckMethod } from "@/lib/types";
@@ -22,6 +22,7 @@ export async function GET() {
     incidents: store.incidents.slice(0, 40),
     maintenances: store.maintenances,
     announcement: store.announcement,
+    webhook: publicWebhookView(store.webhook),
     lastCheckAt: store.lastCheckAt,
   });
 }
