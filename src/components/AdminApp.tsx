@@ -21,6 +21,7 @@ import {
 } from "@/lib/format";
 import { maintenancePhase } from "@/lib/maintenance";
 import { AdminSelect } from "./AdminSelect";
+import { AnnouncementBanner } from "./AnnouncementBanner";
 import { SegmentedControl } from "./SegmentedControl";
 import { StatusDot, statusLabel } from "./StatusDot";
 
@@ -1841,24 +1842,30 @@ export function AdminApp() {
                     transition={{ duration: 0.28 }}
                   >
                     <section className="admin-stream">
+                      <div className="stream-head">
+                        <div>
+                          <h2>Live preview</h2>
+                          <p>How the notice appears on the public status page.</p>
+                        </div>
+                      </div>
                       {announcement?.enabled ? (
-                        <div
-                          className={`announcement-preview tone-${announcement.tone}`}
-                        >
-                          <p className="announcement-label">
-                            Current announcement ({announcement.tone})
-                          </p>
-                          <p className="announcement-text">
-                            {announcement.message}
-                          </p>
+                        <div className="notice-preview-wrap">
+                          <AnnouncementBanner
+                            announcement={announcement}
+                            compact
+                          />
                           <p className="announcement-meta">
-                            Updated {formatRelative(announcement.updatedAt)}
+                            Updated {formatRelative(announcement.updatedAt)} ·{" "}
+                            {announcement.tone === "warn" ? "Warning" : "Info"}{" "}
+                            tone
                           </p>
                         </div>
                       ) : (
                         <div className="admin-empty">
-                          <p>No active announcement</p>
-                          <span>Configure one from the editor.</span>
+                          <p>No active notice</p>
+                          <span>
+                            Enable a message in the editor to show it publicly.
+                          </span>
                         </div>
                       )}
                     </section>
