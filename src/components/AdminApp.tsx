@@ -270,6 +270,8 @@ export function AdminApp() {
         message: json.announcement.message,
         tone: json.announcement.tone,
       });
+    } else {
+      setAnnouncementForm(emptyAnnouncementForm);
     }
   }, []);
 
@@ -634,21 +636,22 @@ export function AdminApp() {
   }
 
   async function clearAnnouncement() {
+    if (!window.confirm("Delete this notice from the status page?")) return;
     setBusy(true);
+    setAnnouncementError(null);
     try {
       const res = await fetch("/api/admin/announcement", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clear: true }),
+        method: "DELETE",
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        showToast(json.error ?? "Could not clear announcement");
+        showToast(json.error ?? "Could not delete notice");
         return;
       }
+      setAnnouncement(null);
       setAnnouncementForm(emptyAnnouncementForm);
       await loadServices();
-      showToast("Announcement cleared");
+      showToast("Notice deleted");
     } finally {
       setBusy(false);
     }
@@ -1988,27 +1991,45 @@ export function AdminApp() {
                     <section className="admin-stream">
                       <div className="stream-head">
                         <div>
-                          <h2>Live preview</h2>
-                          <p>How the notice appears on the public status page.</p>
+                          <h2>Current notice</h2>
+                          <p>Public banner on the status page.</p>
                         </div>
                       </div>
-                      {announcement?.enabled ? (
+                      {announcement ? (
                         <div className="notice-preview-wrap">
-                          <AnnouncementBanner
-                            announcement={announcement}
-                            compact
-                          />
-                          <p className="announcement-meta">
-                            Updated {formatRelative(announcement.updatedAt)} ·{" "}
-                            {announcement.tone === "warn" ? "Warning" : "Info"}{" "}
-                            tone
-                          </p>
+                          {announcement.enabled ? (
+                            <AnnouncementBanner
+                              announcement={announcement}
+                              compact
+                            />
+                          ) : (
+                            <div className="admin-empty notice-hidden-card">
+                              <p>Saved · hidden from public</p>
+                              <span>{announcement.message}</span>
+                            </div>
+                          )}
+                          <div className="notice-preview-actions">
+                            <p className="announcement-meta">
+                              Updated {formatRelative(announcement.updatedAt)} ·{" "}
+                              {announcement.tone === "warn" ? "Warning" : "Info"}{" "}
+                              tone
+                              {!announcement.enabled ? " · disabled" : ""}
+                            </p>
+                            <button
+                              type="button"
+                              className="ghost-btn danger-btn"
+                              onClick={clearAnnouncement}
+                              disabled={busy}
+                            >
+                              Delete notice
+                            </button>
+                          </div>
                         </div>
                       ) : (
                         <div className="admin-empty">
-                          <p>No active notice</p>
+                          <p>No notice saved</p>
                           <span>
-                            Enable a message in the editor to show it publicly.
+                            Create a message in the editor to show it publicly.
                           </span>
                         </div>
                       )}
@@ -2019,7 +2040,9 @@ export function AdminApp() {
                         <div className="editor-head">
                           <div>
                             <p className="editor-kicker">Announcement</p>
-                            <h2>Manage notice</h2>
+                            <h2>
+                              {announcement ? "Edit notice" : "New notice"}
+                            </h2>
                           </div>
                         </div>
 
@@ -2083,14 +2106,16 @@ export function AdminApp() {
                           >
                             {busy ? "Saving…" : "Save"}
                           </button>
-                          <button
-                            type="button"
-                            className="ghost-btn"
-                            onClick={clearAnnouncement}
-                            disabled={busy}
-                          >
-                            Clear
-                          </button>
+                          {announcement ? (
+                            <button
+                              type="button"
+                              className="ghost-btn danger-btn"
+                              onClick={clearAnnouncement}
+                              disabled={busy}
+                            >
+                              Delete
+                            </button>
+                          ) : null}
                         </div>
                       </form>
                     </aside>

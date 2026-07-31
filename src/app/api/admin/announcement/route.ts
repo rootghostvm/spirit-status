@@ -47,3 +47,16 @@ export async function PUT(request: Request) {
     return adminErrorResponse(error, "Could not save announcement");
   }
 }
+
+export async function DELETE() {
+  if (!(await requireAdmin())) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    await setAnnouncement(null);
+    return NextResponse.json({ announcement: null, ok: true });
+  } catch (error) {
+    return adminErrorResponse(error, "Could not delete notice");
+  }
+}

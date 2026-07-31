@@ -2031,6 +2031,21 @@ select {
   margin-top: 0.85rem;
 }
 
+.notice-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.notice-hidden-card span {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--ink);
+  word-break: break-word;
+}
+
 .announcement-preview.tone-warn {
   background: rgba(197, 122, 18, 0.1);
   border-color: rgba(197, 122, 18, 0.2);
