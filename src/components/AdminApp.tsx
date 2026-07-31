@@ -20,7 +20,42 @@ import {
   toDatetimeLocalValue,
 } from "@/lib/format";
 import { maintenancePhase } from "@/lib/maintenance";
+import { AdminSelect } from "./AdminSelect";
+import { SegmentedControl } from "./SegmentedControl";
 import { StatusDot, statusLabel } from "./StatusDot";
+
+const INCIDENT_UPDATE_STATUS_OPTIONS = [
+  {
+    value: "investigating",
+    label: "Investigating",
+    hint: "Looking into the issue",
+    tone: "warn",
+  },
+  {
+    value: "identified",
+    label: "Identified",
+    hint: "Cause found",
+    tone: "warn",
+  },
+  {
+    value: "monitoring",
+    label: "Monitoring",
+    hint: "Watching recovery",
+    tone: "up",
+  },
+  {
+    value: "resolved",
+    label: "Resolved",
+    hint: "Issue closed",
+    tone: "up",
+  },
+  {
+    value: "update",
+    label: "Update",
+    hint: "General progress note",
+    tone: "info",
+  },
+] as const;
 
 type AdminService = Service & { latest?: CheckResult | null };
 type TabId = "services" | "maintenance" | "incidents" | "notice";
@@ -158,6 +193,8 @@ export function AdminApp() {
   const [addingUpdateToIncidentId, setAddingUpdateToIncidentId] = useState<
     string | null
   >(null);
+  const [serviceSearch, setServiceSearch] = useState("");
+  const [groupFilter, setGroupFilter] = useState("all");
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -244,6 +281,40 @@ export function AdminApp() {
         new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
     );
   }, [incidents]);
+
+  const serviceGroups = useMemo(() => {
+    const groups = new Set<string>();
+    for (const service of services) {
+      const group = service.group?.trim() || "General";
+      groups.add(group);
+    }
+    return Array.from(groups).sort((a, b) => a.localeCompare(b));
+  }, [services]);
+
+  const groupFilterOptions = useMemo(
+    () => [
+      { value: "all", label: "All groups" },
+      ...serviceGroups.map((group) => ({ value: group, label: group })),
+    ],
+    [serviceGroups],
+  );
+
+  const filteredServices = useMemo(() => {
+    const query = serviceSearch.trim().toLowerCase();
+    return services.filter((service) => {
+      const group = service.group?.trim() || "General";
+      if (groupFilter !== "all" && group !== groupFilter) return false;
+      if (!query) return true;
+      return (
+        service.name.toLowerCase().includes(query) ||
+        service.url.toLowerCase().includes(query) ||
+        group.toLowerCase().includes(query)
+      );
+    });
+  }, [services, serviceSearch, groupFilter]);
+
+  const hasPausedServices = services.some((s) => !s.enabled);
+  const hasEnabledServices = services.some((s) => s.enabled);
 
   async function onLogin(event: FormEvent) {
     event.preventDefault();
@@ -556,6 +627,58 @@ export function AdminApp() {
     }
   }
 
+  async function pauseAllServices() {
+    const targets = services.filter((s) => s.enabled);
+    if (!targets.length) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        targets.map((service) =>
+          fetch(`/api/admin/services/${service.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: false }),
+          }),
+        ),
+      );
+      await loadServices();
+      showToast("All services paused");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resumeAllServices() {
+    const targets = services.filter((s) => !s.enabled);
+    if (!targets.length) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        targets.map((service) =>
+          fetch(`/api/admin/services/${service.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: true }),
+          }),
+        ),
+      );
+      await loadServices();
+      showToast("All services resumed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyStatusLink() {
+    const link = `${window.location.origin}/`;
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast("Link copied");
+    } catch {
+      showToast("Could not copy link");
+    }
+  }
+
   async function removeService(service: AdminService) {
     if (!window.confirm(`Remove ${service.name}?`)) return;
     setBusy(true);
@@ -861,6 +984,13 @@ export function AdminApp() {
                 >
                   Check now
                 </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={copyStatusLink}
+                >
+                  Copy status link
+                </button>
                 <a href="/" className="ghost-link">
                   Public
                 </a>
@@ -887,14 +1017,76 @@ export function AdminApp() {
                     transition={{ duration: 0.28 }}
                   >
                     <section className="admin-stream">
+                      {services.length ? (
+                        <div className="admin-toolbar">
+                          <label className="admin-search">
+                            <span className="sr-only">Search services</span>
+                            <input
+                              type="search"
+                              value={serviceSearch}
+                              onChange={(e) => setServiceSearch(e.target.value)}
+                              placeholder="Search name, URL, or group"
+                            />
+                          </label>
+                          <AdminSelect
+                            value={groupFilter}
+                            onChange={setGroupFilter}
+                            options={groupFilterOptions}
+                            ariaLabel="Filter by group"
+                          />
+                        </div>
+                      ) : null}
+
+                      <div className="admin-stream-head">
+                        <p className="admin-stream-count">
+                          {!services.length
+                            ? "No services"
+                            : filteredServices.length === services.length
+                              ? `${services.length} service${services.length === 1 ? "" : "s"}`
+                              : `${filteredServices.length} of ${services.length}`}
+                        </p>
+                        {services.length ? (
+                          <div className="admin-stream-actions">
+                            {hasEnabledServices ? (
+                              <button
+                                type="button"
+                                className="ghost-btn"
+                                onClick={pauseAllServices}
+                                disabled={busy}
+                              >
+                                Pause all
+                              </button>
+                            ) : null}
+                            {hasPausedServices ? (
+                              <button
+                                type="button"
+                                className="ghost-btn"
+                                onClick={resumeAllServices}
+                                disabled={busy}
+                              >
+                                Resume all
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+
                       {!services.length ? (
                         <div className="admin-empty">
                           <p>No services yet</p>
                           <span>Add your first website in the editor.</span>
                         </div>
+                      ) : !filteredServices.length ? (
+                        <div className="admin-empty">
+                          <p>No matching services</p>
+                          <span>Try a different search or group filter.</span>
+                        </div>
                       ) : (
                         <ul className="ops-list">
-                          {services.map((service, idx) => {
+                          {filteredServices.map((service) => {
+                            const idx = services.findIndex(
+                              (s) => s.id === service.id,
+                            );
                             const status = service.enabled
                               ? (service.latest?.status ?? "unknown")
                               : "unknown";
@@ -925,9 +1117,16 @@ export function AdminApp() {
                                         : "Paused"}
                                       {" · "}
                                       {service.method}
-                                      {service.latest?.responseMs != null
-                                        ? ` · ${formatLatency(service.latest.responseMs)}`
-                                        : ""}
+                                      {service.latest?.responseMs != null ? (
+                                        <>
+                                          {" · "}
+                                          <span className="ops-row-latency">
+                                            {formatLatency(
+                                              service.latest.responseMs,
+                                            )}
+                                          </span>
+                                        </>
+                                      ) : null}
                                     </p>
                                     {service.latest?.error ? (
                                       <p className="ops-row-error">
@@ -940,6 +1139,20 @@ export function AdminApp() {
                                   <button
                                     type="button"
                                     className="ghost-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      window.open(
+                                        service.url,
+                                        "_blank",
+                                        "noopener,noreferrer",
+                                      );
+                                    }}
+                                  >
+                                    Open URL
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="ghost-btn"
                                     onClick={() => toggleEnabled(service)}
                                     disabled={busy}
                                   >
@@ -949,7 +1162,7 @@ export function AdminApp() {
                                     type="button"
                                     className="ghost-btn"
                                     onClick={() => moveService(service, "up")}
-                                    disabled={busy || idx === 0}
+                                    disabled={busy || idx <= 0}
                                   >
                                     ↑
                                   </button>
@@ -958,7 +1171,7 @@ export function AdminApp() {
                                     className="ghost-btn"
                                     onClick={() => moveService(service, "down")}
                                     disabled={
-                                      busy || idx === services.length - 1
+                                      busy || idx < 0 || idx >= services.length - 1
                                     }
                                   >
                                     ↓
@@ -1056,23 +1269,32 @@ export function AdminApp() {
                                   }))
                                 }
                                 placeholder="General"
+                                list="admin-group-suggestions"
                               />
+                              <datalist id="admin-group-suggestions">
+                                {serviceGroups.map((group) => (
+                                  <option key={group} value={group} />
+                                ))}
+                              </datalist>
                             </label>
-                            <label>
-                              Method
-                              <select
+                            <div className="form-field">
+                              <span className="form-label">Method</span>
+                              <SegmentedControl
                                 value={form.method}
-                                onChange={(e) =>
+                                onChange={(method) =>
                                   setForm((f) => ({
                                     ...f,
-                                    method: e.target.value as CheckMethod,
+                                    method: method as CheckMethod,
                                   }))
                                 }
-                              >
-                                <option value="GET">GET</option>
-                                <option value="HEAD">HEAD</option>
-                              </select>
-                            </label>
+                                options={[
+                                  { value: "GET", label: "GET" },
+                                  { value: "HEAD", label: "HEAD" },
+                                ]}
+                                ariaLabel="HTTP method"
+                                disabled={busy}
+                              />
+                            </div>
                           </div>
                           <label>
                             Expected Status Codes
@@ -1465,30 +1687,21 @@ export function AdminApp() {
                                   >
                                     <label>
                                       Status
-                                      <select
+                                      <AdminSelect
                                         value={incidentUpdateForm.status}
-                                        onChange={(e) =>
+                                        onChange={(status) =>
                                           setIncidentUpdateForm((f) => ({
                                             ...f,
-                                            status: e.target
-                                              .value as IncidentUpdateStatus,
+                                            status:
+                                              status as IncidentUpdateStatus,
                                           }))
                                         }
-                                      >
-                                        <option value="investigating">
-                                          Investigating
-                                        </option>
-                                        <option value="identified">
-                                          Identified
-                                        </option>
-                                        <option value="monitoring">
-                                          Monitoring
-                                        </option>
-                                        <option value="resolved">
-                                          Resolved
-                                        </option>
-                                        <option value="update">Update</option>
-                                      </select>
+                                        options={[
+                                          ...INCIDENT_UPDATE_STATUS_OPTIONS,
+                                        ]}
+                                        ariaLabel="Incident update status"
+                                        disabled={busy}
+                                      />
                                     </label>
                                     <label>
                                       Message
@@ -1565,23 +1778,24 @@ export function AdminApp() {
                               required
                             />
                           </label>
-                          <label>
-                            Status
-                            <select
+                          <div className="form-field">
+                            <span className="form-label">Status</span>
+                            <SegmentedControl
                               value={incidentForm.status}
-                              onChange={(e) =>
+                              onChange={(status) =>
                                 setIncidentForm((f) => ({
                                   ...f,
-                                  status: e.target.value as
-                                    | "degraded"
-                                    | "down",
+                                  status: status as "degraded" | "down",
                                 }))
                               }
-                            >
-                              <option value="degraded">Degraded</option>
-                              <option value="down">Down</option>
-                            </select>
-                          </label>
+                              options={[
+                                { value: "degraded", label: "Degraded" },
+                                { value: "down", label: "Down" },
+                              ]}
+                              ariaLabel="Incident status"
+                              disabled={busy}
+                            />
+                          </div>
 
                           <div className="maint-targets">
                             <p className="form-label">Affected services</p>
@@ -1672,21 +1886,24 @@ export function AdminApp() {
                             />
                             Enabled (visible to public)
                           </label>
-                          <label>
-                            Tone
-                            <select
+                          <div className="form-field">
+                            <span className="form-label">Tone</span>
+                            <SegmentedControl
                               value={announcementForm.tone}
-                              onChange={(e) =>
+                              onChange={(tone) =>
                                 setAnnouncementForm((f) => ({
                                   ...f,
-                                  tone: e.target.value as "info" | "warn",
+                                  tone: tone as "info" | "warn",
                                 }))
                               }
-                            >
-                              <option value="info">Info</option>
-                              <option value="warn">Warning</option>
-                            </select>
-                          </label>
+                              options={[
+                                { value: "info", label: "Info" },
+                                { value: "warn", label: "Warn" },
+                              ]}
+                              ariaLabel="Announcement tone"
+                              disabled={busy}
+                            />
+                          </div>
                           <label>
                             Message
                             <textarea
