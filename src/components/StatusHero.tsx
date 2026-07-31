@@ -3,7 +3,6 @@
 import { motion } from "framer-motion";
 import type { ServiceHealth } from "@/lib/types";
 import { StatusDot, statusLabel } from "./StatusDot";
-import { RelativeTime } from "./RelativeTime";
 
 const headlines: Record<ServiceHealth, string> = {
   operational: "All systems operational",
@@ -17,14 +16,12 @@ export function StatusHero({
   brand,
   title,
   overall,
-  lastCheckAt,
   nextCheckInMs,
   checkIntervalMs,
 }: {
   brand: string;
   title: string;
   overall: ServiceHealth;
-  lastCheckAt: string | null;
   nextCheckInMs: number;
   checkIntervalMs: number;
 }) {
@@ -93,17 +90,7 @@ export function StatusHero({
           <StatusDot status={overall} size="lg" />
           <div>
             <p className="overall-label">{headlines[overall]}</p>
-            <p className="overall-meta">
-              {statusLabel(overall)}
-              {lastCheckAt ? (
-                <>
-                  {" · checked "}
-                  <RelativeTime iso={lastCheckAt} />
-                </>
-              ) : (
-                " · waiting for first probe"
-              )}
-            </p>
+            <p className="overall-meta">{statusLabel(overall)}</p>
           </div>
         </motion.div>
 

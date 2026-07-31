@@ -17,9 +17,9 @@ services:
       - key: CHECK_INTERVAL_MS
         value: "30000"
       - key: CHECK_TIMEOUT_MS
-        value: "10000"
+        value: "5000"
       - key: CHECK_RETRIES
-        value: "1"
+        value: "0"
       - key: NEXT_PUBLIC_BRAND_NAME
         value: SpiritHost
       - key: NEXT_PUBLIC_STATUS_TITLE

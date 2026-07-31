@@ -97,10 +97,16 @@ async function probeOnce(
       },
     });
 
-    // Some hosts reject HEAD — fall back to GET once.
+    // Some hosts reject HEAD — fall back to GET once (same timeout budget).
     if (method === "HEAD" && (response.status === 405 || response.status === 501)) {
       clearTimeout(timeout);
       return await probeOnce(url, "GET", expected);
+    }
+
+    // Drop the body immediately — we only need status codes, not page content.
+    // Downloading large/slow responses was stretching probes toward ~100s.
+    if (method === "GET" && response.body) {
+      await response.body.cancel().catch(() => undefined);
     }
 
     clearTimeout(timeout);

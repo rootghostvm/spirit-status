@@ -98,7 +98,6 @@ export function StatusPageClient({
         brand={data.brand}
         title={data.title}
         overall={data.overall}
-        lastCheckAt={data.lastCheckAt}
         nextCheckInMs={mounted ? tick : initial.nextCheckInMs}
         checkIntervalMs={data.checkIntervalMs}
       />
