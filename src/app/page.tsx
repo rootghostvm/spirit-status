@@ -7,7 +7,7 @@ import { statusLabel } from "@/lib/labels";
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
-  startMonitor();
+  // Reuses the short in-memory cache from getPublicStatus — no probe wait.
   const status = await getPublicStatus();
   const headline =
     status.overall === "operational"

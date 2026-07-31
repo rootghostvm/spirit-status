@@ -17,9 +17,7 @@ export function StatusPageClient({
   const [data, setData] = useState(initial);
   const [tick, setTick] = useState(initial.nextCheckInMs);
   const [mounted, setMounted] = useState(false);
-  const [probing, setProbing] = useState(initial.nextCheckInMs <= 0);
   const fetching = useRef(false);
-  const zeroRefreshLock = useRef(false);
 
   const refresh = useCallback(async () => {
     if (fetching.current) return;
@@ -30,7 +28,6 @@ export function StatusPageClient({
       const json = (await res.json()) as PublicStatusPayload;
       setData(json);
       setTick(json.nextCheckInMs);
-      setProbing(json.nextCheckInMs <= 0);
     } catch {
       // keep last known state
     } finally {
@@ -45,7 +42,6 @@ export function StatusPageClient({
   useEffect(() => {
     setData(initial);
     setTick(initial.nextCheckInMs);
-    setProbing(initial.nextCheckInMs <= 0);
   }, [initial]);
 
   useEffect(() => {
@@ -56,24 +52,14 @@ export function StatusPageClient({
     return () => window.clearInterval(id);
   }, [mounted]);
 
+  // Light polling — status API must stay fast (no waiting on probes).
   useEffect(() => {
     if (!mounted) return;
     const id = window.setInterval(() => {
       void refresh();
-    }, 5_000);
+    }, 10_000);
     return () => window.clearInterval(id);
   }, [mounted, refresh]);
-
-  useEffect(() => {
-    if (!mounted || tick > 0) {
-      zeroRefreshLock.current = false;
-      return;
-    }
-    setProbing(true);
-    if (zeroRefreshLock.current) return;
-    zeroRefreshLock.current = true;
-    void refresh();
-  }, [mounted, tick, refresh]);
 
   return (
     <div className="page-shell">
@@ -84,7 +70,7 @@ export function StatusPageClient({
         lastCheckAt={data.lastCheckAt}
         nextCheckInMs={mounted ? tick : initial.nextCheckInMs}
         checkIntervalMs={data.checkIntervalMs}
-        probing={mounted ? probing || tick <= 0 : initial.nextCheckInMs <= 0}
+        probing={data.probing}
       />
 
       <AnnouncementBanner announcement={data.announcement} />

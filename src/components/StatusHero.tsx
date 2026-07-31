@@ -125,9 +125,11 @@ export function StatusHero({
             />
           </div>
           <span suppressHydrationWarning>
-            {probing || nextCheckInMs <= 0
+            {probing
               ? "Probing now…"
-              : `Next probe in ${Math.ceil(nextCheckInMs / 1000)}s`}
+              : nextCheckInMs <= 0
+                ? "Next probe due"
+                : `Next probe in ${Math.ceil(nextCheckInMs / 1000)}s`}
           </span>
         </motion.div>
       </div>

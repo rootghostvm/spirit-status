@@ -146,6 +146,7 @@ export async function checkService(service: Service): Promise<CheckResult> {
 
 let checkChain: Promise<void> = Promise.resolve();
 let lastOverdueKickAt = 0;
+let statusCache: { at: number; payload: PublicStatusPayload } | null = null;
 
 export function runChecks(serviceIds?: string[]) {
   const job = () => executeChecks(serviceIds);
@@ -170,6 +171,7 @@ async function executeChecks(serviceIds?: string[]) {
   const partial = Boolean(serviceIds?.length);
   state.running = true;
   state.lastStartedAt = Date.now();
+  statusCache = null;
 
   try {
     const store = await readStore();
@@ -192,15 +194,14 @@ async function executeChecks(serviceIds?: string[]) {
       await updateLastCheckAt(new Date().toISOString());
     }
 
-    // Persist immediately so the next request (or worker) sees fresh probe times.
     await flushStoreNow();
-
     return { ran: true, checked: results.length };
   } catch (error) {
     console.error("[spirit-status] check cycle failed", error);
     return { ran: false, checked: 0 };
   } finally {
     state.running = false;
+    statusCache = null;
     if (!partial) {
       state.nextCheckAt = Date.now() + CHECK_INTERVAL_MS;
     }
@@ -214,39 +215,57 @@ export function startMonitor() {
   state.nextCheckAt = Date.now() + 1_500;
   void runChecks();
 
-  // Keep the timer referenced so hosting platforms actually fire it.
   state.timer = setInterval(() => {
     void runChecks();
   }, CHECK_INTERVAL_MS);
 }
 
-/**
- * If probes are overdue, run a cycle before returning public status.
- * This keeps "checked" and "next probe" honest on free hosts that sleep.
- */
-async function ensureProbesFresh() {
+/** Kick a background probe if overdue — never blocks the status response. */
+function kickProbeIfOverdue(store: Awaited<ReturnType<typeof readStore>>) {
   const state = monitorState();
   if (state.running) return;
 
-  const store = await readStore();
   const freshest = freshestProbeMs(store);
   const overdue =
-    freshest == null || Date.now() - freshest >= CHECK_INTERVAL_MS - 500;
+    freshest == null || Date.now() - freshest >= CHECK_INTERVAL_MS;
 
   if (!overdue) return;
+  if (Date.now() - lastOverdueKickAt < 12_000) return;
 
-  // Avoid stampeding every 3s client poll while a cycle is failing/slow.
-  if (Date.now() - lastOverdueKickAt < 4_000) return;
   lastOverdueKickAt = Date.now();
+  void runChecks();
+}
 
-  await runChecks();
+function withLiveClock(
+  payload: PublicStatusPayload,
+  probing: boolean,
+): PublicStatusPayload {
+  const lastMs = payload.lastCheckAt
+    ? new Date(payload.lastCheckAt).getTime()
+    : null;
+  const nextCheckInMs =
+    lastMs != null
+      ? Math.max(0, lastMs + payload.checkIntervalMs - Date.now())
+      : 0;
+
+  return {
+    ...payload,
+    nextCheckInMs,
+    probing,
+  };
 }
 
 export async function getPublicStatus(): Promise<PublicStatusPayload> {
   startMonitor();
-  await ensureProbesFresh();
+
+  const probingNow = monitorState().running;
+  if (statusCache && Date.now() - statusCache.at < 2_500) {
+    return withLiveClock(statusCache.payload, probingNow);
+  }
 
   const store = await readStore();
+  kickProbeIfOverdue(store);
+
   const services = [...store.services]
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
     .map((service) => toPublicService(service, store));
@@ -271,7 +290,6 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
     ? new Date(freshestProbe).toISOString()
     : null;
 
-  // Single source of truth: next probe is always lastProbe + interval.
   const nextCheckInMs =
     freshestProbe != null
       ? Math.max(0, freshestProbe + CHECK_INTERVAL_MS - Date.now())
@@ -287,7 +305,7 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
       ? store.announcement
       : null;
 
-  return {
+  const payload: PublicStatusPayload = {
     brand: BRAND_NAME,
     title: STATUS_TITLE,
     overall,
@@ -310,7 +328,11 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
     lastCheckAt,
     nextCheckInMs,
     checkIntervalMs: CHECK_INTERVAL_MS,
+    probing: state.running,
   };
+
+  statusCache = { at: Date.now(), payload };
+  return payload;
 }
 
 export function overallStatus(statuses: ServiceHealth[]): ServiceHealth {

@@ -144,4 +144,5 @@ export interface PublicStatusPayload {
   lastCheckAt: string | null;
   nextCheckInMs: number;
   checkIntervalMs: number;
+  probing: boolean;
 }
