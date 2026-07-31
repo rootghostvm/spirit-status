@@ -9,6 +9,12 @@ import { ServiceList } from "./ServiceList";
 import { MaintenanceFeed } from "./MaintenanceFeed";
 import { IncidentFeed } from "./IncidentFeed";
 
+function isNewerIso(next: string | null, prev: string | null) {
+  if (!next) return false;
+  if (!prev) return true;
+  return new Date(next).getTime() >= new Date(prev).getTime();
+}
+
 export function StatusPageClient({
   initial,
 }: {
@@ -18,6 +24,24 @@ export function StatusPageClient({
   const [tick, setTick] = useState(initial.nextCheckInMs);
   const [mounted, setMounted] = useState(false);
   const fetching = useRef(false);
+  const lastCheckRef = useRef(initial.lastCheckAt);
+
+  const applyStatus = useCallback((json: PublicStatusPayload) => {
+    // Never let a stale API response move "checked" backwards.
+    const lastCheckAt = isNewerIso(json.lastCheckAt, lastCheckRef.current)
+      ? json.lastCheckAt
+      : lastCheckRef.current;
+    lastCheckRef.current = lastCheckAt;
+
+    const lastMs = lastCheckAt ? new Date(lastCheckAt).getTime() : null;
+    const nextCheckInMs =
+      lastMs != null
+        ? Math.max(0, lastMs + json.checkIntervalMs - Date.now())
+        : json.nextCheckInMs;
+
+    setData({ ...json, lastCheckAt, nextCheckInMs });
+    setTick(nextCheckInMs);
+  }, []);
 
   const refresh = useCallback(async () => {
     if (fetching.current) return;
@@ -26,23 +50,21 @@ export function StatusPageClient({
       const res = await fetch("/api/status", { cache: "no-store" });
       if (!res.ok) return;
       const json = (await res.json()) as PublicStatusPayload;
-      setData(json);
-      setTick(json.nextCheckInMs);
+      applyStatus(json);
     } catch {
       // keep last known state
     } finally {
       fetching.current = false;
     }
-  }, []);
+  }, [applyStatus]);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
   useEffect(() => {
-    setData(initial);
-    setTick(initial.nextCheckInMs);
-  }, [initial]);
+    applyStatus(initial);
+  }, [initial, applyStatus]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -52,7 +74,6 @@ export function StatusPageClient({
     return () => window.clearInterval(id);
   }, [mounted]);
 
-  // Light polling — status API must stay fast (no waiting on probes).
   useEffect(() => {
     if (!mounted) return;
     const id = window.setInterval(() => {
@@ -70,7 +91,6 @@ export function StatusPageClient({
         lastCheckAt={data.lastCheckAt}
         nextCheckInMs={mounted ? tick : initial.nextCheckInMs}
         checkIntervalMs={data.checkIntervalMs}
-        probing={data.probing}
       />
 
       <AnnouncementBanner announcement={data.announcement} />

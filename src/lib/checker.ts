@@ -212,12 +212,36 @@ export function startMonitor() {
   const state = monitorState();
   if (state.timer) return;
 
-  state.nextCheckAt = Date.now() + 1_500;
-  void runChecks();
+  // Do not probe immediately on boot — that caused "checked 39s ago + Probing now".
+  // Align the first tick to when the last saved probe is actually due.
+  void (async () => {
+    try {
+      const store = await readStore();
+      const freshest = freshestProbeMs(store);
+      const delay =
+        freshest != null
+          ? Math.max(0, freshest + CHECK_INTERVAL_MS - Date.now())
+          : 1_500;
+      state.nextCheckAt = Date.now() + delay;
+      windowSetTimeout(() => {
+        void runChecks();
+      }, delay);
+    } catch {
+      state.nextCheckAt = Date.now() + 1_500;
+      windowSetTimeout(() => {
+        void runChecks();
+      }, 1_500);
+    }
+  })();
 
   state.timer = setInterval(() => {
     void runChecks();
   }, CHECK_INTERVAL_MS);
+}
+
+function windowSetTimeout(fn: () => void, ms: number) {
+  const t = setTimeout(fn, ms);
+  return t;
 }
 
 /** Kick a background probe if overdue — never blocks the status response. */
@@ -230,16 +254,14 @@ function kickProbeIfOverdue(store: Awaited<ReturnType<typeof readStore>>) {
     freshest == null || Date.now() - freshest >= CHECK_INTERVAL_MS;
 
   if (!overdue) return;
-  if (Date.now() - lastOverdueKickAt < 12_000) return;
+  // Longer debounce so refreshes don't keep restarting probes.
+  if (Date.now() - lastOverdueKickAt < 20_000) return;
 
   lastOverdueKickAt = Date.now();
   void runChecks();
 }
 
-function withLiveClock(
-  payload: PublicStatusPayload,
-  probing: boolean,
-): PublicStatusPayload {
+function withLiveClock(payload: PublicStatusPayload): PublicStatusPayload {
   const lastMs = payload.lastCheckAt
     ? new Date(payload.lastCheckAt).getTime()
     : null;
@@ -251,16 +273,14 @@ function withLiveClock(
   return {
     ...payload,
     nextCheckInMs,
-    probing,
   };
 }
 
 export async function getPublicStatus(): Promise<PublicStatusPayload> {
   startMonitor();
 
-  const probingNow = monitorState().running;
   if (statusCache && Date.now() - statusCache.at < 2_500) {
-    return withLiveClock(statusCache.payload, probingNow);
+    return withLiveClock(statusCache.payload);
   }
 
   const store = await readStore();
@@ -328,7 +348,6 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
     lastCheckAt,
     nextCheckInMs,
     checkIntervalMs: CHECK_INTERVAL_MS,
-    probing: state.running,
   };
 
   statusCache = { at: Date.now(), payload };
