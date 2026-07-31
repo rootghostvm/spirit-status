@@ -19,6 +19,7 @@ import {
   dateKey,
   dayBucketStatus,
   dayBucketUptime,
+  sanitizeProbeError,
 } from "./format";
 import {
   isServiceUnderMaintenance,
@@ -38,6 +39,8 @@ declare global {
   var __spiritMonitor:
     | {
         timer: NodeJS.Timeout | null;
+        bootTimer: NodeJS.Timeout | null;
+        started: boolean;
         running: boolean;
         lastStartedAt: number | null;
         nextCheckAt: number | null;
@@ -49,6 +52,8 @@ function monitorState() {
   if (!globalThis.__spiritMonitor) {
     globalThis.__spiritMonitor = {
       timer: null,
+      bootTimer: null,
+      started: false,
       running: false,
       lastStartedAt: null,
       nextCheckAt: null,
@@ -148,6 +153,10 @@ let checkChain: Promise<void> = Promise.resolve();
 let lastOverdueKickAt = 0;
 let statusCache: { at: number; payload: PublicStatusPayload } | null = null;
 
+export function invalidateStatusCache() {
+  statusCache = null;
+}
+
 export function runChecks(serviceIds?: string[]) {
   const job = () => executeChecks(serviceIds);
   const result = checkChain.then(job, job);
@@ -156,6 +165,11 @@ export function runChecks(serviceIds?: string[]) {
     () => undefined,
   );
   return result;
+}
+
+/** Hero clock uses full-cycle lastCheckAt only (not single-service probes). */
+function heroProbeMs(store: Awaited<ReturnType<typeof readStore>>) {
+  return store.lastCheckAt ? new Date(store.lastCheckAt).getTime() : null;
 }
 
 function freshestProbeMs(store: Awaited<ReturnType<typeof readStore>>) {
@@ -171,7 +185,7 @@ async function executeChecks(serviceIds?: string[]) {
   const partial = Boolean(serviceIds?.length);
   state.running = true;
   state.lastStartedAt = Date.now();
-  statusCache = null;
+  invalidateStatusCache();
 
   try {
     const store = await readStore();
@@ -201,7 +215,7 @@ async function executeChecks(serviceIds?: string[]) {
     return { ran: false, checked: 0 };
   } finally {
     state.running = false;
-    statusCache = null;
+    invalidateStatusCache();
     if (!partial) {
       state.nextCheckAt = Date.now() + CHECK_INTERVAL_MS;
     }
@@ -210,38 +224,41 @@ async function executeChecks(serviceIds?: string[]) {
 
 export function startMonitor() {
   const state = monitorState();
-  if (state.timer) return;
+  // Synchronous guard so concurrent callers cannot install multiple intervals.
+  if (state.started) return;
+  state.started = true;
 
-  // Do not probe immediately on boot — that caused "checked 39s ago + Probing now".
-  // Align the first tick to when the last saved probe is actually due.
   void (async () => {
     try {
       const store = await readStore();
-      const freshest = freshestProbeMs(store);
+      const anchor = heroProbeMs(store) ?? freshestProbeMs(store);
       const delay =
-        freshest != null
-          ? Math.max(0, freshest + CHECK_INTERVAL_MS - Date.now())
+        anchor != null
+          ? Math.max(0, anchor + CHECK_INTERVAL_MS - Date.now())
           : 1_500;
       state.nextCheckAt = Date.now() + delay;
-      windowSetTimeout(() => {
+      state.bootTimer = setTimeout(() => {
+        state.bootTimer = null;
         void runChecks();
+        if (!state.timer) {
+          state.timer = setInterval(() => {
+            void runChecks();
+          }, CHECK_INTERVAL_MS);
+        }
       }, delay);
     } catch {
       state.nextCheckAt = Date.now() + 1_500;
-      windowSetTimeout(() => {
+      state.bootTimer = setTimeout(() => {
+        state.bootTimer = null;
         void runChecks();
+        if (!state.timer) {
+          state.timer = setInterval(() => {
+            void runChecks();
+          }, CHECK_INTERVAL_MS);
+        }
       }, 1_500);
     }
   })();
-
-  state.timer = setInterval(() => {
-    void runChecks();
-  }, CHECK_INTERVAL_MS);
-}
-
-function windowSetTimeout(fn: () => void, ms: number) {
-  const t = setTimeout(fn, ms);
-  return t;
 }
 
 /** Kick a background probe if overdue — never blocks the status response. */
@@ -249,12 +266,11 @@ function kickProbeIfOverdue(store: Awaited<ReturnType<typeof readStore>>) {
   const state = monitorState();
   if (state.running) return;
 
-  const freshest = freshestProbeMs(store);
+  const anchor = heroProbeMs(store) ?? freshestProbeMs(store);
   const overdue =
-    freshest == null || Date.now() - freshest >= CHECK_INTERVAL_MS;
+    anchor == null || Date.now() - anchor >= CHECK_INTERVAL_MS;
 
   if (!overdue) return;
-  // Longer debounce so refreshes don't keep restarting probes.
   if (Date.now() - lastOverdueKickAt < 20_000) return;
 
   lastOverdueKickAt = Date.now();
@@ -305,14 +321,11 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
     services: groupServices,
   }));
 
-  const freshestProbe = freshestProbeMs(store);
-  const lastCheckAt = freshestProbe
-    ? new Date(freshestProbe).toISOString()
-    : null;
-
+  const heroMs = heroProbeMs(store);
+  const lastCheckAt = heroMs ? new Date(heroMs).toISOString() : null;
   const nextCheckInMs =
-    freshestProbe != null
-      ? Math.max(0, freshestProbe + CHECK_INTERVAL_MS - Date.now())
+    heroMs != null
+      ? Math.max(0, heroMs + CHECK_INTERVAL_MS - Date.now())
       : 0;
 
   const state = monitorState();
@@ -413,7 +426,10 @@ function toPublicService(
       ) / 10
     : null;
 
-  const latest = store.latest[service.id] ?? null;
+  const latestRaw = store.latest[service.id] ?? null;
+  const latest = latestRaw
+    ? { ...latestRaw, error: sanitizeProbeError(latestRaw.error) }
+    : null;
   const displayStatus: ServiceHealth = !service.enabled
     ? "unknown"
     : underMaintenance

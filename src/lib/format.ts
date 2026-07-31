@@ -91,6 +91,63 @@ export function ensureHttpsUrl(raw: string) {
   return trimmed;
 }
 
+/** Block localhost / private / metadata targets (SSRF hardening for probes). */
+export function assertSafeProbeUrl(raw: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(ensureHttpsUrl(raw));
+  } catch {
+    throw new Error("Invalid URL");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only http(s) URLs are allowed");
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal") ||
+    host === "metadata.google.internal"
+  ) {
+    throw new Error("Local or internal hostnames are not allowed");
+  }
+
+  if (host === "::1" || host === "0.0.0.0") {
+    throw new Error("Private network URLs are not allowed");
+  }
+
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) {
+    const parts = ipv4.slice(1).map(Number);
+    if (parts.some((n) => n > 255)) throw new Error("Invalid URL");
+    const [a, b] = parts;
+    const privateRange =
+      a === 10 ||
+      a === 127 ||
+      a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168);
+    if (privateRange) {
+      throw new Error("Private network URLs are not allowed");
+    }
+  }
+
+  return parsed.toString();
+}
+
+export function sanitizeProbeError(message: string | null | undefined) {
+  if (!message) return null;
+  return message
+    .replace(/https?:\/\/[^\s]+/gi, "[url]")
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "[host]")
+    .slice(0, 180);
+}
+
 export function toDatetimeLocalValue(iso: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";

@@ -25,9 +25,9 @@ export function StatusPageClient({
   const [mounted, setMounted] = useState(false);
   const fetching = useRef(false);
   const lastCheckRef = useRef(initial.lastCheckAt);
+  const dueRefreshLock = useRef(false);
 
   const applyStatus = useCallback((json: PublicStatusPayload) => {
-    // Never let a stale API response move "checked" backwards.
     const lastCheckAt = isNewerIso(json.lastCheckAt, lastCheckRef.current)
       ? json.lastCheckAt
       : lastCheckRef.current;
@@ -81,6 +81,16 @@ export function StatusPageClient({
     }, 10_000);
     return () => window.clearInterval(id);
   }, [mounted, refresh]);
+
+  useEffect(() => {
+    if (!mounted || tick > 0) {
+      dueRefreshLock.current = false;
+      return;
+    }
+    if (dueRefreshLock.current) return;
+    dueRefreshLock.current = true;
+    void refresh();
+  }, [mounted, tick, refresh]);
 
   return (
     <div className="page-shell">

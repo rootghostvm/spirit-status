@@ -295,6 +295,16 @@ export async function updateStore(
     const store = await ensureStore();
     await mutator(store);
     await persist(store);
+    // Durably flush R2 immediately so admin edits survive free-tier freezes.
+    if (isR2Configured()) {
+      await flushStoreNow();
+    }
+    try {
+      const { invalidateStatusCache } = await import("./checker");
+      invalidateStatusCache();
+    } catch {
+      // ignore circular-init edge during boot
+    }
     return store;
   });
 }
@@ -375,7 +385,22 @@ export async function deleteService(id: string) {
     delete store.latest[id];
     delete store.history[id];
     delete store.daily[id];
-    store.incidents = store.incidents.filter((i) => i.serviceId !== id);
+
+    store.incidents = store.incidents
+      .map((incident) => {
+        const serviceIds = incident.serviceIds.filter((sid) => sid !== id);
+        const serviceId =
+          incident.serviceId === id
+            ? (serviceIds[0] ?? null)
+            : incident.serviceId;
+        return { ...incident, serviceId, serviceIds };
+      })
+      .filter((incident) => {
+        if (incident.serviceIds.length > 0 || incident.serviceId) return true;
+        // Keep manual site-wide incidents; drop auto incidents with no service left.
+        return incident.source === "manual";
+      });
+
     for (const m of store.maintenances) {
       m.serviceIds = m.serviceIds.filter((sid) => sid !== id);
     }

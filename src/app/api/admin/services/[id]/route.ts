@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { deleteService, updateService } from "@/lib/store";
 import { runChecks } from "@/lib/checker";
-import { ensureHttpsUrl } from "@/lib/format";
+import { assertSafeProbeUrl } from "@/lib/format";
 import type { CheckMethod } from "@/lib/types";
 
 type Params = { params: Promise<{ id: string }> };
@@ -30,11 +30,13 @@ export async function PATCH(request: Request, { params }: Params) {
 
   const patch = { ...body };
   if (patch.url) {
-    patch.url = ensureHttpsUrl(patch.url);
     try {
-      new URL(patch.url);
-    } catch {
-      return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
+      patch.url = assertSafeProbeUrl(patch.url);
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Invalid URL" },
+        { status: 400 },
+      );
     }
   }
 

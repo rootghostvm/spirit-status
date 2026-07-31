@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { createService, readStore } from "@/lib/store";
 import { runChecks, startMonitor } from "@/lib/checker";
-import { ensureHttpsUrl } from "@/lib/format";
+import { assertSafeProbeUrl } from "@/lib/format";
 import type { CheckMethod } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -48,11 +48,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const url = ensureHttpsUrl(body.url);
+  let url: string;
   try {
-    new URL(url);
-  } catch {
-    return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
+    url = assertSafeProbeUrl(body.url);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Invalid URL" },
+      { status: 400 },
+    );
   }
 
   const service = await createService({

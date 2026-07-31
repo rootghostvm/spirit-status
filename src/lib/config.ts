@@ -23,3 +23,19 @@ export function getAdminPassword() {
 export function getAdminSecret() {
   return process.env.ADMIN_SECRET || "spirit-status-dev-secret";
 }
+
+export function assertProductionSecrets() {
+  if (process.env.NODE_ENV !== "production") return;
+  const password = process.env.ADMIN_PASSWORD?.trim();
+  const secret = process.env.ADMIN_SECRET?.trim();
+  if (!password || password === "changeme") {
+    throw new Error(
+      "ADMIN_PASSWORD must be set to a strong value in production",
+    );
+  }
+  if (!secret || secret === "spirit-status-dev-secret" || secret.length < 16) {
+    throw new Error(
+      "ADMIN_SECRET must be set to a long random value in production",
+    );
+  }
+}
