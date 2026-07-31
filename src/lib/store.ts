@@ -28,7 +28,12 @@ import { isServiceUnderMaintenance } from "./maintenance";
 import { isR2Configured, readR2Object, writeR2Object } from "./r2";
 import {
   defaultWebhookSettings,
+  incidentOpenedEvent,
+  incidentResolvedEvent,
+  incidentUpdatedEvent,
+  maintenanceEvent,
   maskWebhookUrl,
+  noticeEvent,
   normalizeWebhookSettings,
   queueWebhookEvents,
 } from "./webhooks";
@@ -464,22 +469,16 @@ export async function createMaintenance(
   });
 
   queueWebhookEvents(webhook, [
-    {
-      type: "maintenance.changed",
-      title: `Maintenance scheduled: ${created.title}`,
-      description: created.message || "A maintenance window was scheduled.",
-      fields: [
-        { name: "Starts", value: created.startsAt, inline: true },
-        { name: "Ends", value: created.endsAt, inline: true },
-        {
-          name: "Scope",
-          value: created.serviceIds.length
-            ? `${created.serviceIds.length} service(s)`
-            : "All services",
-          inline: true,
-        },
-      ],
-    },
+    maintenanceEvent({
+      action: "scheduled",
+      title: created.title,
+      message: created.message,
+      startsAt: created.startsAt,
+      endsAt: created.endsAt,
+      scope: created.serviceIds.length
+        ? `${created.serviceIds.length} service(s)`
+        : "All services",
+    }),
   ]);
 
   return created;
@@ -516,15 +515,16 @@ export async function updateMaintenance(
   if (updated) {
     const item = updated as Maintenance;
     queueWebhookEvents(webhook, [
-      {
-        type: "maintenance.changed",
-        title: `Maintenance updated: ${item.title}`,
-        description: item.message || "Maintenance window was updated.",
-        fields: [
-          { name: "Starts", value: item.startsAt, inline: true },
-          { name: "Ends", value: item.endsAt, inline: true },
-        ],
-      },
+      maintenanceEvent({
+        action: "updated",
+        title: item.title,
+        message: item.message,
+        startsAt: item.startsAt,
+        endsAt: item.endsAt,
+        scope: item.serviceIds.length
+          ? `${item.serviceIds.length} service(s)`
+          : "All services",
+      }),
     ]);
   }
 
@@ -545,11 +545,10 @@ export async function deleteMaintenance(id: string) {
   });
   if (removed) {
     queueWebhookEvents(webhook, [
-      {
-        type: "maintenance.changed",
-        title: `Maintenance removed: ${title}`,
-        description: "A maintenance window was deleted.",
-      },
+      maintenanceEvent({
+        action: "removed",
+        title,
+      }),
     ]);
   }
   return removed;
@@ -633,16 +632,15 @@ function syncIncidents(
       ],
     };
     store.incidents.unshift(incident);
-    events.push({
-      type: "incident.opened",
-      title: `${service.name} is ${badStatus}`,
-      description: message,
-      fields: [
-        { name: "Service", value: service.name, inline: true },
-        { name: "Status", value: badStatus, inline: true },
-        { name: "Source", value: "auto", inline: true },
-      ],
-    });
+    events.push(
+      incidentOpenedEvent({
+        serviceName: service.name,
+        status: badStatus,
+        message,
+        source: "auto",
+        group: service.group,
+      }),
+    );
   } else if (isBad && open && open.source === "auto") {
     const prevStatus = open.status;
     if (open.status !== next.status) {
@@ -654,15 +652,14 @@ function syncIncidents(
         ? `HTTP ${next.statusCode}`
         : `${service.name} is ${next.status}`);
     if (prevStatus !== open.status) {
-      events.push({
-        type: "incident.updated",
-        title: `${service.name} now ${open.status}`,
-        description: open.message,
-        fields: [
-          { name: "Service", value: service.name, inline: true },
-          { name: "Status", value: open.status, inline: true },
-        ],
-      });
+      events.push(
+        incidentUpdatedEvent({
+          serviceName: service.name,
+          status: open.status,
+          message: open.message,
+          previousStatus: prevStatus,
+        }),
+      );
     }
   } else if (wasBad && !isBad && open && open.source === "auto") {
     open.resolvedAt = next.checkedAt;
@@ -672,15 +669,14 @@ function syncIncidents(
       status: "resolved",
       message: `${service.name} recovered`,
     });
-    events.push({
-      type: "incident.resolved",
-      title: `${service.name} recovered`,
-      description: `${service.name} is operational again.`,
-      fields: [
-        { name: "Service", value: service.name, inline: true },
-        { name: "Status", value: "operational", inline: true },
-      ],
-    });
+    events.push(
+      incidentResolvedEvent({
+        serviceName: service.name,
+        message: `${service.name} is operational again.`,
+        startedAt: open.startedAt,
+        resolvedAt: next.checkedAt,
+      }),
+    );
   }
 
   store.incidents = store.incidents.slice(0, INCIDENT_LIMIT);
@@ -730,15 +726,15 @@ export async function recordCheckResults(
             status: "resolved",
             message: "Closed during scheduled maintenance",
           });
-          events.push({
-            type: "incident.resolved",
-            title: `${service.name} incident closed`,
-            description: "Closed during scheduled maintenance.",
-            fields: [
-              { name: "Service", value: service.name, inline: true },
-              { name: "Reason", value: "maintenance", inline: true },
-            ],
-          });
+          events.push(
+            incidentResolvedEvent({
+              serviceName: service.name,
+              message: "Closed during scheduled maintenance.",
+              startedAt: open.startedAt,
+              resolvedAt: result.checkedAt,
+              reason: "Scheduled maintenance",
+            }),
+          );
         }
       }
     }
@@ -833,15 +829,12 @@ export async function createManualIncident(input: {
   });
 
   queueWebhookEvents(webhook, [
-    {
-      type: "incident.opened",
-      title: `Incident: ${created.serviceName}`,
-      description: created.message,
-      fields: [
-        { name: "Status", value: created.status, inline: true },
-        { name: "Source", value: "manual", inline: true },
-      ],
-    },
+    incidentOpenedEvent({
+      serviceName: created.serviceName,
+      status: created.status,
+      message: created.message,
+      source: "manual",
+    }),
   ]);
 
   return created;
@@ -880,23 +873,24 @@ export async function addIncidentUpdate(
 
   if (updated) {
     const incident = updated as Incident;
-    const type: WebhookEvent["type"] =
-      input.status === "resolved" ? "incident.resolved" : "incident.updated";
-
-    queueWebhookEvents(webhook, [
-      {
-        type,
-        title:
-          type === "incident.resolved"
-            ? `Resolved: ${incident.serviceName}`
-            : `Update: ${incident.serviceName}`,
-        description: input.message.trim(),
-        fields: [
-          { name: "Status", value: input.status, inline: true },
-          { name: "Service", value: incident.serviceName, inline: true },
-        ],
-      },
-    ]);
+    if (input.status === "resolved") {
+      queueWebhookEvents(webhook, [
+        incidentResolvedEvent({
+          serviceName: incident.serviceName,
+          message: input.message.trim(),
+          startedAt: incident.startedAt,
+          resolvedAt: incident.resolvedAt ?? now,
+        }),
+      ]);
+    } else {
+      queueWebhookEvents(webhook, [
+        incidentUpdatedEvent({
+          serviceName: incident.serviceName,
+          status: input.status,
+          message: input.message.trim(),
+        }),
+      ]);
+    }
   }
 
   return updated;
@@ -951,32 +945,17 @@ export async function setAnnouncement(
 
   if (cleared) {
     queueWebhookEvents(webhook, [
-      {
-        type: "notice.changed",
-        title: "Notice cleared",
-        description: "The public status notice was removed.",
-      },
+      noticeEvent({ action: "cleared" }),
     ]);
   } else if (next) {
     const announcement = next as Announcement;
     queueWebhookEvents(webhook, [
-      {
-        type: "notice.changed",
-        title: announcement.enabled ? "Notice published" : "Notice saved (hidden)",
-        description: announcement.message,
-        fields: [
-          {
-            name: "Tone",
-            value: announcement.tone,
-            inline: true,
-          },
-          {
-            name: "Visible",
-            value: announcement.enabled ? "yes" : "no",
-            inline: true,
-          },
-        ],
-      },
+      noticeEvent({
+        action: announcement.enabled ? "published" : "saved",
+        message: announcement.message,
+        tone: announcement.tone,
+        enabled: announcement.enabled,
+      }),
     ]);
   }
 

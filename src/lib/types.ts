@@ -109,6 +109,8 @@ export interface WebhookEvent {
   title: string;
   description: string;
   color?: number;
+  /** Plain text above the embed — shows in Discord notifications. */
+  content?: string;
   fields?: Array<{ name: string; value: string; inline?: boolean }>;
 }
 
