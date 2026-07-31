@@ -20,6 +20,7 @@ export function StatusHero({
   lastCheckAt,
   nextCheckInMs,
   checkIntervalMs,
+  probing = false,
 }: {
   brand: string;
   title: string;
@@ -27,11 +28,14 @@ export function StatusHero({
   lastCheckAt: string | null;
   nextCheckInMs: number;
   checkIntervalMs: number;
+  probing?: boolean;
 }) {
-  const progress = Math.max(
-    0,
-    Math.min(1, 1 - nextCheckInMs / Math.max(checkIntervalMs, 1)),
-  );
+  const progress = probing
+    ? 1
+    : Math.max(
+        0,
+        Math.min(1, 1 - nextCheckInMs / Math.max(checkIntervalMs, 1)),
+      );
 
   return (
     <header className="hero">
@@ -121,7 +125,9 @@ export function StatusHero({
             />
           </div>
           <span suppressHydrationWarning>
-            Next probe in {Math.ceil(nextCheckInMs / 1000)}s
+            {probing || nextCheckInMs <= 0
+              ? "Probing now…"
+              : `Next probe in ${Math.ceil(nextCheckInMs / 1000)}s`}
           </span>
         </motion.div>
       </div>

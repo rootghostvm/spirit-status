@@ -17,9 +17,11 @@ export function StatusPageClient({
   const [data, setData] = useState(initial);
   const [tick, setTick] = useState(initial.nextCheckInMs);
   const [mounted, setMounted] = useState(false);
+  const [probing, setProbing] = useState(initial.nextCheckInMs <= 0);
   const fetching = useRef(false);
+  const zeroRefreshLock = useRef(false);
 
-  const refresh = useCallback(async (opts?: { syncTick?: boolean }) => {
+  const refresh = useCallback(async () => {
     if (fetching.current) return;
     fetching.current = true;
     try {
@@ -27,15 +29,8 @@ export function StatusPageClient({
       if (!res.ok) return;
       const json = (await res.json()) as PublicStatusPayload;
       setData(json);
-      setTick((current) => {
-        const server = json.nextCheckInMs;
-        // After a completed probe, server countdown resets near the full interval.
-        if (opts?.syncTick) return server;
-        // Smooth local countdown: only correct meaningful drift / earlier probes.
-        if (server < current - 1500) return server;
-        if (Math.abs(server - current) > 8_000) return server;
-        return current;
-      });
+      setTick(json.nextCheckInMs);
+      setProbing(json.nextCheckInMs <= 0);
     } catch {
       // keep last known state
     } finally {
@@ -50,6 +45,7 @@ export function StatusPageClient({
   useEffect(() => {
     setData(initial);
     setTick(initial.nextCheckInMs);
+    setProbing(initial.nextCheckInMs <= 0);
   }, [initial]);
 
   useEffect(() => {
@@ -64,13 +60,19 @@ export function StatusPageClient({
     if (!mounted) return;
     const id = window.setInterval(() => {
       void refresh();
-    }, 3_000);
+    }, 5_000);
     return () => window.clearInterval(id);
   }, [mounted, refresh]);
 
   useEffect(() => {
-    if (!mounted || tick > 0) return;
-    void refresh({ syncTick: true });
+    if (!mounted || tick > 0) {
+      zeroRefreshLock.current = false;
+      return;
+    }
+    setProbing(true);
+    if (zeroRefreshLock.current) return;
+    zeroRefreshLock.current = true;
+    void refresh();
   }, [mounted, tick, refresh]);
 
   return (
@@ -82,6 +84,7 @@ export function StatusPageClient({
         lastCheckAt={data.lastCheckAt}
         nextCheckInMs={mounted ? tick : initial.nextCheckInMs}
         checkIntervalMs={data.checkIntervalMs}
+        probing={mounted ? probing || tick <= 0 : initial.nextCheckInMs <= 0}
       />
 
       <AnnouncementBanner announcement={data.announcement} />
@@ -102,7 +105,7 @@ export function StatusPageClient({
           <button
             type="button"
             className="text-btn"
-            onClick={() => void refresh({ syncTick: true })}
+            onClick={() => void refresh()}
           >
             Refresh
           </button>

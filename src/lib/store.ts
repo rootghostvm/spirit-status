@@ -207,6 +207,20 @@ function scheduleR2Flush() {
   }, 1_500);
 }
 
+export async function flushStoreNow() {
+  if (r2FlushTimer) {
+    clearTimeout(r2FlushTimer);
+    r2FlushTimer = null;
+  }
+  try {
+    await flushR2();
+  } catch (error) {
+    console.error("[spirit-status] R2 flush failed", error);
+    r2Dirty = true;
+    scheduleR2Flush();
+  }
+}
+
 async function ensureStore(): Promise<StoreData> {
   if (memoryStore) return memoryStore;
 

@@ -8,6 +8,7 @@ import {
 } from "./config";
 import {
   avgLatency,
+  flushStoreNow,
   readStore,
   recordCheckResults,
   sparklineValues,
@@ -144,6 +145,7 @@ export async function checkService(service: Service): Promise<CheckResult> {
 }
 
 let checkChain: Promise<void> = Promise.resolve();
+let lastOverdueKickAt = 0;
 
 export function runChecks(serviceIds?: string[]) {
   const job = () => executeChecks(serviceIds);
@@ -153,6 +155,14 @@ export function runChecks(serviceIds?: string[]) {
     () => undefined,
   );
   return result;
+}
+
+function freshestProbeMs(store: Awaited<ReturnType<typeof readStore>>) {
+  const times = [
+    store.lastCheckAt ? new Date(store.lastCheckAt).getTime() : 0,
+    ...Object.values(store.latest).map((c) => new Date(c.checkedAt).getTime()),
+  ].filter((t) => Number.isFinite(t) && t > 0);
+  return times.length ? Math.max(...times) : null;
 }
 
 async function executeChecks(serviceIds?: string[]) {
@@ -179,14 +189,18 @@ async function executeChecks(serviceIds?: string[]) {
     if (results.length) {
       await recordCheckResults(results, { touchLastCheck: !partial });
     } else if (!partial) {
-      // Keep "last checked" honest even when nothing was probed.
       await updateLastCheckAt(new Date().toISOString());
     }
 
+    // Persist immediately so the next request (or worker) sees fresh probe times.
+    await flushStoreNow();
+
     return { ran: true, checked: results.length };
+  } catch (error) {
+    console.error("[spirit-status] check cycle failed", error);
+    return { ran: false, checked: 0 };
   } finally {
     state.running = false;
-    // Only full monitor cycles own the public countdown.
     if (!partial) {
       state.nextCheckAt = Date.now() + CHECK_INTERVAL_MS;
     }
@@ -198,17 +212,105 @@ export function startMonitor() {
   if (state.timer) return;
 
   state.nextCheckAt = Date.now() + 1_500;
-  void runChecks().finally(() => {
-    state.nextCheckAt = Date.now() + CHECK_INTERVAL_MS;
-  });
+  void runChecks();
 
+  // Keep the timer referenced so hosting platforms actually fire it.
   state.timer = setInterval(() => {
     void runChecks();
   }, CHECK_INTERVAL_MS);
+}
 
-  if (typeof state.timer.unref === "function") {
-    state.timer.unref();
+/**
+ * If probes are overdue, run a cycle before returning public status.
+ * This keeps "checked" and "next probe" honest on free hosts that sleep.
+ */
+async function ensureProbesFresh() {
+  const state = monitorState();
+  if (state.running) return;
+
+  const store = await readStore();
+  const freshest = freshestProbeMs(store);
+  const overdue =
+    freshest == null || Date.now() - freshest >= CHECK_INTERVAL_MS - 500;
+
+  if (!overdue) return;
+
+  // Avoid stampeding every 3s client poll while a cycle is failing/slow.
+  if (Date.now() - lastOverdueKickAt < 4_000) return;
+  lastOverdueKickAt = Date.now();
+
+  await runChecks();
+}
+
+export async function getPublicStatus(): Promise<PublicStatusPayload> {
+  startMonitor();
+  await ensureProbesFresh();
+
+  const store = await readStore();
+  const services = [...store.services]
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+    .map((service) => toPublicService(service, store));
+
+  const visible = services.filter((s) => s.enabled);
+  const overall = overallStatus(visible.map((s) => s.displayStatus));
+
+  const groupMap = new Map<string, PublicServiceView[]>();
+  for (const service of visible) {
+    const list = groupMap.get(service.group) ?? [];
+    list.push(service);
+    groupMap.set(service.group, list);
   }
+
+  const groups = [...groupMap.entries()].map(([name, groupServices]) => ({
+    name,
+    services: groupServices,
+  }));
+
+  const freshestProbe = freshestProbeMs(store);
+  const lastCheckAt = freshestProbe
+    ? new Date(freshestProbe).toISOString()
+    : null;
+
+  // Single source of truth: next probe is always lastProbe + interval.
+  const nextCheckInMs =
+    freshestProbe != null
+      ? Math.max(0, freshestProbe + CHECK_INTERVAL_MS - Date.now())
+      : 0;
+
+  const state = monitorState();
+  state.nextCheckAt = Date.now() + nextCheckInMs;
+
+  const { current: maintenances, history: maintenanceHistory } =
+    toPublicMaintenances(store);
+  const announcement =
+    store.announcement?.enabled && store.announcement.message
+      ? store.announcement
+      : null;
+
+  return {
+    brand: BRAND_NAME,
+    title: STATUS_TITLE,
+    overall,
+    summary: {
+      total: visible.length,
+      operational: visible.filter((s) => s.displayStatus === "operational")
+        .length,
+      degraded: visible.filter((s) => s.displayStatus === "degraded").length,
+      down: visible.filter((s) => s.displayStatus === "down").length,
+      maintenance: visible.filter((s) => s.displayStatus === "maintenance")
+        .length,
+      paused: services.filter((s) => !s.enabled).length,
+    },
+    announcement,
+    groups,
+    services: visible,
+    incidents: store.incidents.slice(0, 20),
+    maintenances,
+    maintenanceHistory,
+    lastCheckAt,
+    nextCheckInMs,
+    checkIntervalMs: CHECK_INTERVAL_MS,
+  };
 }
 
 export function overallStatus(statuses: ServiceHealth[]): ServiceHealth {
@@ -329,98 +431,4 @@ function toPublicMaintenances(
     .slice(0, 20);
 
   return { current, history };
-}
-
-export async function getPublicStatus(): Promise<PublicStatusPayload> {
-  startMonitor();
-  const store = await readStore();
-  const state = monitorState();
-
-  const services = [...store.services]
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
-    .map((service) => toPublicService(service, store));
-
-  // Public board only lists enabled monitors.
-  const visible = services.filter((s) => s.enabled);
-  const overall = overallStatus(visible.map((s) => s.displayStatus));
-
-  const groupMap = new Map<string, PublicServiceView[]>();
-  for (const service of visible) {
-    const list = groupMap.get(service.group) ?? [];
-    list.push(service);
-    groupMap.set(service.group, list);
-  }
-
-  const groups = [...groupMap.entries()].map(([name, groupServices]) => ({
-    name,
-    services: groupServices,
-  }));
-
-  // Prefer the freshest probe timestamp so "checked Xm ago" matches reality.
-  const probeTimes = [
-    store.lastCheckAt ? new Date(store.lastCheckAt).getTime() : 0,
-    ...Object.values(store.latest).map((c) => new Date(c.checkedAt).getTime()),
-  ].filter((t) => Number.isFinite(t) && t > 0);
-  const freshestProbe = probeTimes.length ? Math.max(...probeTimes) : null;
-  const lastCheckAt = freshestProbe
-    ? new Date(freshestProbe).toISOString()
-    : null;
-
-  const dueFromLast =
-    freshestProbe != null
-      ? freshestProbe + CHECK_INTERVAL_MS - Date.now()
-      : null;
-  const timerRemaining =
-    state.nextCheckAt != null ? state.nextCheckAt - Date.now() : null;
-
-  // If we're overdue based on last probe, kick a cycle and show 0.
-  if (dueFromLast != null && dueFromLast <= 0 && !state.running) {
-    void runChecks();
-  }
-
-  let nextCheckInMs: number;
-  if (dueFromLast != null && timerRemaining != null) {
-    nextCheckInMs = Math.max(0, Math.min(dueFromLast, timerRemaining));
-  } else {
-    nextCheckInMs = Math.max(
-      0,
-      dueFromLast ?? timerRemaining ?? CHECK_INTERVAL_MS,
-    );
-  }
-  // Never advertise a long wait when the last probe is already stale.
-  if (dueFromLast != null && dueFromLast <= 0) {
-    nextCheckInMs = 0;
-  }
-
-  const { current: maintenances, history: maintenanceHistory } =
-    toPublicMaintenances(store);
-  const announcement =
-    store.announcement?.enabled && store.announcement.message
-      ? store.announcement
-      : null;
-
-  return {
-    brand: BRAND_NAME,
-    title: STATUS_TITLE,
-    overall,
-    summary: {
-      total: visible.length,
-      operational: visible.filter((s) => s.displayStatus === "operational")
-        .length,
-      degraded: visible.filter((s) => s.displayStatus === "degraded").length,
-      down: visible.filter((s) => s.displayStatus === "down").length,
-      maintenance: visible.filter((s) => s.displayStatus === "maintenance")
-        .length,
-      paused: services.filter((s) => !s.enabled).length,
-    },
-    announcement,
-    groups,
-    services: visible,
-    incidents: store.incidents.slice(0, 20),
-    maintenances,
-    maintenanceHistory,
-    lastCheckAt,
-    nextCheckInMs,
-    checkIntervalMs: CHECK_INTERVAL_MS,
-  };
 }
