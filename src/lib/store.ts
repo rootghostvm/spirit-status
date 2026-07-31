@@ -195,6 +195,7 @@ let writeQueue: Promise<void> = Promise.resolve();
 let memoryStore: StoreData | null = null;
 let r2FlushTimer: ReturnType<typeof setTimeout> | null = null;
 let r2Dirty = false;
+let r2FlushChain: Promise<void> = Promise.resolve();
 
 async function loadFromLocalFile(): Promise<StoreData | null> {
   try {
@@ -205,17 +206,44 @@ async function loadFromLocalFile(): Promise<StoreData | null> {
   }
 }
 
-async function flushR2() {
-  if (!isR2Configured() || !memoryStore || !r2Dirty) return;
-  r2Dirty = false;
-  await writeR2Object(JSON.stringify(memoryStore, null, 2));
+/**
+ * Write the current in-memory store to R2.
+ * Keeps a single-flight chain so timer retries cannot overwrite newer puts.
+ * Only clears dirty after a successful put; if mutated mid-write, loops again.
+ */
+async function flushR2(): Promise<void> {
+  if (!isR2Configured() || !memoryStore) return;
+
+  while (r2Dirty && memoryStore) {
+    const snapshot = JSON.stringify(memoryStore, null, 2);
+    r2Dirty = false;
+    try {
+      await writeR2Object(snapshot);
+    } catch (error) {
+      r2Dirty = true;
+      throw error;
+    }
+    // Another mutation may have set r2Dirty during the put — flush again.
+  }
+}
+
+function enqueueR2Flush(): Promise<void> {
+  const run = r2FlushChain.then(
+    () => flushR2(),
+    () => flushR2(),
+  );
+  r2FlushChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 function scheduleR2Flush() {
   if (r2FlushTimer) return;
   r2FlushTimer = setTimeout(() => {
     r2FlushTimer = null;
-    void flushR2().catch((error) => {
+    void enqueueR2Flush().catch((error) => {
       console.error("[spirit-status] R2 flush failed", error);
       r2Dirty = true;
       scheduleR2Flush();
@@ -223,18 +251,14 @@ function scheduleR2Flush() {
   }, 1_500);
 }
 
+/** Flush immediately. Throws on failure so admin APIs can surface errors. */
 export async function flushStoreNow() {
   if (r2FlushTimer) {
     clearTimeout(r2FlushTimer);
     r2FlushTimer = null;
   }
-  try {
-    await flushR2();
-  } catch (error) {
-    console.error("[spirit-status] R2 flush failed", error);
-    r2Dirty = true;
-    scheduleR2Flush();
-  }
+  if (!isR2Configured()) return;
+  await enqueueR2Flush();
 }
 
 async function ensureStore(): Promise<StoreData> {
@@ -253,7 +277,13 @@ async function ensureStore(): Promise<StoreData> {
 
   if (!loaded) {
     loaded = defaultStore();
+    memoryStore = loaded;
     await persist(loaded);
+    if (isR2Configured()) {
+      await flushStoreNow().catch((error) => {
+        console.error("[spirit-status] bootstrap R2 flush failed", error);
+      });
+    }
     return loaded;
   }
 
@@ -267,13 +297,17 @@ async function ensureStore(): Promise<StoreData> {
     !("webhook" in loaded)
   ) {
     await persist(loaded);
+    if (isR2Configured()) {
+      await flushStoreNow().catch((error) => {
+        console.error("[spirit-status] migration R2 flush failed", error);
+      });
+    }
   }
   return loaded;
 }
 
 async function persist(store: StoreData) {
   memoryStore = store;
-  const body = JSON.stringify(store, null, 2);
 
   if (isR2Configured()) {
     r2Dirty = true;
@@ -281,6 +315,7 @@ async function persist(store: StoreData) {
     return;
   }
 
+  const body = JSON.stringify(store, null, 2);
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmp = `${STORE_PATH}.tmp`;
   await fs.writeFile(tmp, body, "utf8");
@@ -313,8 +348,17 @@ export async function updateStore(
     await mutator(store);
     await persist(store);
     // Durably flush R2 immediately so admin edits survive free-tier freezes.
+    // Throws on failure so API routes return an error instead of a false success.
     if (isR2Configured()) {
-      await flushStoreNow();
+      try {
+        await flushStoreNow();
+      } catch (error) {
+        console.error("[spirit-status] durable flush failed", error);
+        scheduleR2Flush();
+        throw new Error(
+          "Saved in memory but failed to persist to storage. Try again in a moment.",
+        );
+      }
     }
     try {
       const { invalidateStatusCache } = await import("./checker");

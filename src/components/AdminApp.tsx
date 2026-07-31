@@ -639,7 +639,7 @@ export function AdminApp() {
       const res = await fetch("/api/admin/announcement", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: false, message: "", tone: "info" }),
+        body: JSON.stringify({ clear: true }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -717,11 +717,16 @@ export function AdminApp() {
   async function toggleEnabled(service: AdminService) {
     setBusy(true);
     try {
-      await fetch(`/api/admin/services/${service.id}`, {
+      const res = await fetch(`/api/admin/services/${service.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: !service.enabled }),
       });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(json.error ?? "Could not update service");
+        return;
+      }
       await loadServices();
       showToast(service.enabled ? "Paused" : "Resumed");
     } finally {
@@ -734,7 +739,7 @@ export function AdminApp() {
     if (!targets.length) return;
     setBusy(true);
     try {
-      await Promise.all(
+      const results = await Promise.all(
         targets.map((service) =>
           fetch(`/api/admin/services/${service.id}`, {
             method: "PATCH",
@@ -743,8 +748,12 @@ export function AdminApp() {
           }),
         ),
       );
+      if (results.some((res) => !res.ok)) {
+        showToast("Some services failed to pause");
+      } else {
+        showToast("All services paused");
+      }
       await loadServices();
-      showToast("All services paused");
     } finally {
       setBusy(false);
     }
@@ -755,7 +764,7 @@ export function AdminApp() {
     if (!targets.length) return;
     setBusy(true);
     try {
-      await Promise.all(
+      const results = await Promise.all(
         targets.map((service) =>
           fetch(`/api/admin/services/${service.id}`, {
             method: "PATCH",
@@ -764,8 +773,12 @@ export function AdminApp() {
           }),
         ),
       );
+      if (results.some((res) => !res.ok)) {
+        showToast("Some services failed to resume");
+      } else {
+        showToast("All services resumed");
+      }
       await loadServices();
-      showToast("All services resumed");
     } finally {
       setBusy(false);
     }
@@ -785,7 +798,14 @@ export function AdminApp() {
     if (!window.confirm(`Remove ${service.name}?`)) return;
     setBusy(true);
     try {
-      await fetch(`/api/admin/services/${service.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/admin/services/${service.id}`, {
+        method: "DELETE",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(json.error ?? "Could not remove service");
+        return;
+      }
       if (editingId === service.id) cancelEdit();
       await loadServices();
       showToast("Service removed");
@@ -802,16 +822,20 @@ export function AdminApp() {
     const target = services[targetIndex];
     setBusy(true);
     try {
-      await fetch(`/api/admin/services/${service.id}`, {
+      const first = await fetch(`/api/admin/services/${service.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sortOrder: target.sortOrder }),
       });
-      await fetch(`/api/admin/services/${target.id}`, {
+      const second = await fetch(`/api/admin/services/${target.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sortOrder: service.sortOrder }),
       });
+      if (!first.ok || !second.ok) {
+        showToast("Could not reorder services");
+        return;
+      }
       await loadServices();
     } finally {
       setBusy(false);
@@ -822,7 +846,14 @@ export function AdminApp() {
     if (!window.confirm(`Delete maintenance "${item.title}"?`)) return;
     setBusy(true);
     try {
-      await fetch(`/api/admin/maintenances/${item.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/admin/maintenances/${item.id}`, {
+        method: "DELETE",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(json.error ?? "Could not delete maintenance");
+        return;
+      }
       if (editingMaintId === item.id) cancelMaintEdit();
       await loadServices();
       showToast("Maintenance deleted");

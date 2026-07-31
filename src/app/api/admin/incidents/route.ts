@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { adminErrorResponse } from "@/lib/api";
 import { createManualIncident, readStore } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -28,12 +29,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Title is required" }, { status: 400 });
   }
 
-  const incident = await createManualIncident({
-    title: body.title,
-    message: body.message || body.title,
-    status: body.status,
-    serviceIds: body.serviceIds,
-  });
+  try {
+    const incident = await createManualIncident({
+      title: body.title,
+      message: body.message || body.title,
+      status: body.status,
+      serviceIds: body.serviceIds,
+    });
 
-  return NextResponse.json({ incident }, { status: 201 });
+    return NextResponse.json({ incident }, { status: 201 });
+  } catch (error) {
+    return adminErrorResponse(error, "Could not create incident");
+  }
 }

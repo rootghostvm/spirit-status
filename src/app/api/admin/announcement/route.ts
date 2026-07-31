@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { adminErrorResponse } from "@/lib/api";
 import { readStore, setAnnouncement } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -24,20 +25,25 @@ export async function PUT(request: Request) {
     clear?: boolean;
   } | null;
 
-  if (!body || body.clear) {
-    await setAnnouncement(null);
-    return NextResponse.json({ announcement: null });
+  if (!body) {
+    return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  if (!body.message?.trim()) {
-    return NextResponse.json({ error: "Message is required" }, { status: 400 });
+  try {
+    // Explicit clear, or empty message treated as clear.
+    if (body.clear || !body.message?.trim()) {
+      await setAnnouncement(null);
+      return NextResponse.json({ announcement: null });
+    }
+
+    const announcement = await setAnnouncement({
+      message: body.message,
+      tone: body.tone,
+      enabled: body.enabled,
+    });
+
+    return NextResponse.json({ announcement });
+  } catch (error) {
+    return adminErrorResponse(error, "Could not save announcement");
   }
-
-  const announcement = await setAnnouncement({
-    message: body.message,
-    tone: body.tone,
-    enabled: body.enabled,
-  });
-
-  return NextResponse.json({ announcement });
 }

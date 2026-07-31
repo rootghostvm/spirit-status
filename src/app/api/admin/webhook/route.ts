@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { adminErrorResponse } from "@/lib/api";
 import {
   publicWebhookView,
   readStore,
@@ -39,40 +40,34 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  const store = await readStore();
-  let url = store.webhook.url;
-  let keepExistingUrl = true;
+  try {
+    const store = await readStore();
+    let url = store.webhook.url;
+    let keepExistingUrl = true;
 
-  if (body.clearUrl) {
-    url = "";
-    keepExistingUrl = false;
-  } else if (typeof body.url === "string" && body.url.trim()) {
-    const trimmed = body.url.trim();
-    // Ignore masked placeholders from the UI.
-    if (!trimmed.includes("********")) {
-      try {
+    if (body.clearUrl) {
+      url = "";
+      keepExistingUrl = false;
+    } else if (typeof body.url === "string" && body.url.trim()) {
+      const trimmed = body.url.trim();
+      // Ignore masked placeholders from the UI.
+      if (!trimmed.includes("********")) {
         url = assertDiscordWebhookUrl(trimmed);
         keepExistingUrl = false;
-      } catch (error) {
-        return NextResponse.json(
-          {
-            error:
-              error instanceof Error ? error.message : "Invalid webhook URL",
-          },
-          { status: 400 },
-        );
       }
     }
+
+    const webhook = await setWebhookSettings({
+      enabled: body.enabled,
+      url,
+      keepExistingUrl,
+      events: body.events,
+    });
+
+    return NextResponse.json({ webhook: publicWebhookView(webhook) });
+  } catch (error) {
+    return adminErrorResponse(error, "Could not save webhook settings");
   }
-
-  const webhook = await setWebhookSettings({
-    enabled: body.enabled,
-    url,
-    keepExistingUrl,
-    events: body.events,
-  });
-
-  return NextResponse.json({ webhook: publicWebhookView(webhook) });
 }
 
 export async function POST(request: Request) {
@@ -84,37 +79,36 @@ export async function POST(request: Request) {
     url?: string;
   } | null;
 
-  const store = await readStore();
-  let url = store.webhook.url;
+  try {
+    const store = await readStore();
+    let url = store.webhook.url;
 
-  if (typeof body?.url === "string" && body.url.trim() && !body.url.includes("********")) {
-    try {
+    if (
+      typeof body?.url === "string" &&
+      body.url.trim() &&
+      !body.url.includes("********")
+    ) {
       url = assertDiscordWebhookUrl(body.url);
-    } catch (error) {
+    }
+
+    if (!url) {
       return NextResponse.json(
-        {
-          error: error instanceof Error ? error.message : "Invalid webhook URL",
-        },
+        { error: "Save a Discord webhook URL first" },
         { status: 400 },
       );
     }
-  }
 
-  if (!url) {
-    return NextResponse.json(
-      { error: "Save a Discord webhook URL first" },
-      { status: 400 },
+    await dispatchWebhookEvents(
+      {
+        enabled: true,
+        url,
+        events: store.webhook.events,
+      },
+      [testWebhookEvent()],
     );
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return adminErrorResponse(error, "Test webhook failed");
   }
-
-  await dispatchWebhookEvents(
-    {
-      enabled: true,
-      url,
-      events: store.webhook.events,
-    },
-    [testWebhookEvent()],
-  );
-
-  return NextResponse.json({ ok: true });
 }

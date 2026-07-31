@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { adminErrorResponse } from "@/lib/api";
 import { createMaintenance, readStore } from "@/lib/store";
 import { maintenancePhase } from "@/lib/maintenance";
 
@@ -49,12 +50,6 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ maintenance }, { status: 201 });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Could not create maintenance",
-      },
-      { status: 400 },
-    );
+    return adminErrorResponse(error, "Could not create maintenance");
   }
 }

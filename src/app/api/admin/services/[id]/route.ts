@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { adminErrorResponse } from "@/lib/api";
 import { deleteService, updateService } from "@/lib/store";
 import { runChecks } from "@/lib/checker";
 import { assertSafeProbeUrl } from "@/lib/format";
 import type { CheckMethod } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -40,13 +43,17 @@ export async function PATCH(request: Request, { params }: Params) {
     }
   }
 
-  const service = await updateService(id, patch);
-  if (!service) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  try {
+    const service = await updateService(id, patch);
+    if (!service) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
 
-  if (service.enabled) await runChecks([service.id]);
-  return NextResponse.json({ service });
+    if (service.enabled) await runChecks([service.id]);
+    return NextResponse.json({ service });
+  } catch (error) {
+    return adminErrorResponse(error, "Could not update service");
+  }
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
@@ -55,10 +62,13 @@ export async function DELETE(_request: Request, { params }: Params) {
   }
 
   const { id } = await params;
-  const removed = await deleteService(id);
-  if (!removed) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  try {
+    const removed = await deleteService(id);
+    if (!removed) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return adminErrorResponse(error, "Could not delete service");
   }
-
-  return NextResponse.json({ ok: true });
 }

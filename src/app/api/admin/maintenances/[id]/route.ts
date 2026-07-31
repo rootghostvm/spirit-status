@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { adminErrorResponse } from "@/lib/api";
 import { deleteMaintenance, updateMaintenance } from "@/lib/store";
+
+export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -29,13 +32,7 @@ export async function PATCH(request: Request, { params }: Params) {
     }
     return NextResponse.json({ maintenance });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Could not update maintenance",
-      },
-      { status: 400 },
-    );
+    return adminErrorResponse(error, "Could not update maintenance");
   }
 }
 
@@ -45,10 +42,13 @@ export async function DELETE(_request: Request, { params }: Params) {
   }
 
   const { id } = await params;
-  const removed = await deleteMaintenance(id);
-  if (!removed) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  try {
+    const removed = await deleteMaintenance(id);
+    if (!removed) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return adminErrorResponse(error, "Could not delete maintenance");
   }
-
-  return NextResponse.json({ ok: true });
 }

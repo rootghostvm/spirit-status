@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { adminErrorResponse } from "@/lib/api";
 import { createService, publicWebhookView, readStore } from "@/lib/store";
 import { runChecks, startMonitor } from "@/lib/checker";
 import { assertSafeProbeUrl } from "@/lib/format";
@@ -59,24 +60,28 @@ export async function POST(request: Request) {
     );
   }
 
-  const service = await createService({
-    name: body.name,
-    url,
-    description: body.description,
-    group: body.group,
-    enabled: body.enabled,
-    method: body.method,
-    expectedStatusCodes: body.expectedStatusCodes,
-  });
+  try {
+    const service = await createService({
+      name: body.name,
+      url,
+      description: body.description,
+      group: body.group,
+      enabled: body.enabled,
+      method: body.method,
+      expectedStatusCodes: body.expectedStatusCodes,
+    });
 
-  await runChecks([service.id]);
-  const store = await readStore();
-  return NextResponse.json(
-    {
-      service,
-      services: store.services,
-      latest: store.latest,
-    },
-    { status: 201 },
-  );
+    await runChecks([service.id]);
+    const store = await readStore();
+    return NextResponse.json(
+      {
+        service,
+        services: store.services,
+        latest: store.latest,
+      },
+      { status: 201 },
+    );
+  } catch (error) {
+    return adminErrorResponse(error, "Could not create service");
+  }
 }
