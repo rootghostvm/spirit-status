@@ -10,24 +10,21 @@ import { RelativeTime } from "./RelativeTime";
 
 export function ServiceList({
   groups,
+  embedded = false,
 }: {
   groups: PublicStatusPayload["groups"];
+  embedded?: boolean;
 }) {
   if (!groups.length) {
     return (
-      <section className="services">
+      <section className={embedded ? undefined : "services"}>
         <p className="empty">No services are being monitored yet.</p>
       </section>
     );
   }
 
-  return (
-    <section className="services" aria-label="Service status">
-      <div className="services-heading">
-        <h2>Services</h2>
-        <p>90-day health bars, live latency, and per-endpoint detail.</p>
-      </div>
-
+  const body = (
+    <>
       {groups.map((group) => (
         <div key={group.name} className="service-group">
           <h3 className="group-title">{group.name}</h3>
@@ -38,6 +35,18 @@ export function ServiceList({
           </ul>
         </div>
       ))}
+    </>
+  );
+
+  if (embedded) return <div className="services-body">{body}</div>;
+
+  return (
+    <section className="services" aria-label="Service status">
+      <div className="services-heading">
+        <h2>Services</h2>
+        <p>90-day health bars, live latency, and per-endpoint detail.</p>
+      </div>
+      {body}
     </section>
   );
 }

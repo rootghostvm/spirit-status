@@ -102,14 +102,26 @@ export function StatusPageClient({
         checkIntervalMs={data.checkIntervalMs}
       />
 
-      <AnnouncementBanner announcement={data.announcement} />
-      <StatusSummary summary={data.summary} />
-      <MaintenanceFeed
-        maintenances={data.maintenances}
-        history={data.maintenanceHistory}
-      />
-      <ServiceList groups={data.groups} />
-      <IncidentFeed incidents={data.incidents} />
+      <div className="status-board">
+        <AnnouncementBanner announcement={data.announcement} />
+
+        <section className="board-section services-section">
+          <div className="services-heading">
+            <div>
+              <h2>Services</h2>
+              <p>90-day health, live latency, and endpoint detail.</p>
+            </div>
+            <StatusSummary summary={data.summary} />
+          </div>
+          <ServiceList groups={data.groups} embedded />
+        </section>
+
+        <MaintenanceFeed
+          maintenances={data.maintenances}
+          history={data.maintenanceHistory}
+        />
+        <IncidentFeed incidents={data.incidents} />
+      </div>
 
       <footer className="site-footer">
         <p>

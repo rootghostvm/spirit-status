@@ -31,27 +31,38 @@ export function StatusHero({
   );
 
   return (
-    <header className="hero">
+    <header className={`hero overall-${overall}`}>
+      <motion.div
+        className="hero-wash"
+        aria-hidden
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
+      />
       <motion.div
         className={`hero-ambient overall-${overall}`}
         aria-hidden
-        initial={{ opacity: 0, scale: 0.92 }}
+        initial={{ opacity: 0, scale: 0.88 }}
         animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1] }}
+        transition={{ duration: 1.15, ease: [0.22, 1, 0.36, 1] }}
       />
 
       <div className="hero-inner">
         <motion.div
           className="hero-kicker"
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.55 }}
+          transition={{ duration: 0.5 }}
         >
           <span className="live-pill">
             <span className="live-pulse" />
             Live
           </span>
-          <span>Auto-refresh · {Math.round(checkIntervalMs / 1000)}s</span>
+          <span className="hero-kicker-title">{title}</span>
+          <span className="hero-kicker-sep" aria-hidden>
+            ·
+          </span>
+          <span>Probe every {Math.round(checkIntervalMs / 1000)}s</span>
         </motion.div>
 
         <motion.p
@@ -63,42 +74,33 @@ export function StatusHero({
           {brand}
         </motion.p>
 
-        <motion.h1
-          className="hero-title"
-          initial={{ opacity: 0, y: 24 }}
+        <motion.div
+          className="overall"
+          initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.75, delay: 0.06, ease: [0.22, 1, 0.36, 1] }}
+          transition={{ duration: 0.7, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
         >
-          {title}
-        </motion.h1>
+          <StatusDot status={overall} size="lg" />
+          <div>
+            <h1 className="overall-label">{headlines[overall]}</h1>
+            <p className="overall-meta">{statusLabel(overall)}</p>
+          </div>
+        </motion.div>
 
         <motion.p
           className="hero-copy"
-          initial={{ opacity: 0, y: 18 }}
+          initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.7, delay: 0.12 }}
+          transition={{ duration: 0.65, delay: 0.14 }}
         >
           Live availability across {brand} services.
         </motion.p>
 
         <motion.div
-          className="overall"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.75, delay: 0.18 }}
-        >
-          <StatusDot status={overall} size="lg" />
-          <div>
-            <p className="overall-label">{headlines[overall]}</p>
-            <p className="overall-meta">{statusLabel(overall)}</p>
-          </div>
-        </motion.div>
-
-        <motion.div
           className="check-meter"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.28, duration: 0.6 }}
+          transition={{ delay: 0.26, duration: 0.55 }}
         >
           <div className="check-meter-track">
             <motion.div
