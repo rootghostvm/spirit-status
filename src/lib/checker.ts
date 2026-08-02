@@ -8,7 +8,6 @@ import {
 } from "./config";
 import {
   avgLatency,
-  flushStoreNow,
   readStore,
   recordCheckResults,
   sparklineValues,
@@ -20,6 +19,8 @@ import {
   dayBucketStatus,
   dayBucketUptime,
   sanitizeProbeError,
+  assertSafeProbeUrl,
+  worseStatus,
 } from "./format";
 import {
   isServiceUnderMaintenance,
@@ -80,6 +81,7 @@ async function probeOnce(
   url: string,
   method: "GET" | "HEAD",
   expected: number[],
+  hop = 0,
 ): Promise<CheckResult> {
   const started = Date.now();
   const controller = new AbortController();
@@ -88,7 +90,7 @@ async function probeOnce(
   try {
     const response = await fetch(url, {
       method,
-      redirect: "follow",
+      redirect: "manual",
       signal: controller.signal,
       cache: "no-store",
       headers: {
@@ -97,14 +99,44 @@ async function probeOnce(
       },
     });
 
+    // Follow at most one safe hop (blocks open redirect SSRF).
+    if (
+      hop === 0 &&
+      [301, 302, 303, 307, 308].includes(response.status)
+    ) {
+      clearTimeout(timeout);
+      const location = response.headers.get("location");
+      if (!location) {
+        return {
+          status: "degraded",
+          statusCode: response.status,
+          responseMs: Date.now() - started,
+          error: "Redirect without location",
+          checkedAt: new Date().toISOString(),
+        };
+      }
+      let nextUrl: string;
+      try {
+        nextUrl = assertSafeProbeUrl(new URL(location, url).toString());
+      } catch {
+        return {
+          status: "down",
+          statusCode: response.status,
+          responseMs: Date.now() - started,
+          error: "Unsafe redirect blocked",
+          checkedAt: new Date().toISOString(),
+        };
+      }
+      return probeOnce(nextUrl, method, expected, 1);
+    }
+
     // Some hosts reject HEAD — fall back to GET once (same timeout budget).
     if (method === "HEAD" && (response.status === 405 || response.status === 501)) {
       clearTimeout(timeout);
-      return await probeOnce(url, "GET", expected);
+      return await probeOnce(url, "GET", expected, hop);
     }
 
     // Drop the body immediately — we only need status codes, not page content.
-    // Downloading large/slow responses was stretching probes toward ~100s.
     if (method === "GET" && response.body) {
       await response.body.cancel().catch(() => undefined);
     }
@@ -157,10 +189,13 @@ export async function checkService(service: Service): Promise<CheckResult> {
 
 let checkChain: Promise<void> = Promise.resolve();
 let lastOverdueKickAt = 0;
-let statusCache: { at: number; payload: PublicStatusPayload } | null = null;
+let statusCache: { at: number; payload: PublicStatusPayload; gen: number } | null =
+  null;
+let statusCacheGen = 0;
 
 export function invalidateStatusCache() {
   statusCache = null;
+  statusCacheGen += 1;
 }
 
 export function runChecks(serviceIds?: string[]) {
@@ -178,20 +213,11 @@ function heroProbeMs(store: Awaited<ReturnType<typeof readStore>>) {
   return store.lastCheckAt ? new Date(store.lastCheckAt).getTime() : null;
 }
 
-function freshestProbeMs(store: Awaited<ReturnType<typeof readStore>>) {
-  const times = [
-    store.lastCheckAt ? new Date(store.lastCheckAt).getTime() : 0,
-    ...Object.values(store.latest).map((c) => new Date(c.checkedAt).getTime()),
-  ].filter((t) => Number.isFinite(t) && t > 0);
-  return times.length ? Math.max(...times) : null;
-}
-
 async function executeChecks(serviceIds?: string[]) {
   const state = monitorState();
   const partial = Boolean(serviceIds?.length);
   state.running = true;
   state.lastStartedAt = Date.now();
-  invalidateStatusCache();
 
   try {
     const store = await readStore();
@@ -214,7 +240,6 @@ async function executeChecks(serviceIds?: string[]) {
       await updateLastCheckAt(new Date().toISOString());
     }
 
-    await flushStoreNow();
     return { ran: true, checked: results.length };
   } catch (error) {
     console.error("[spirit-status] check cycle failed", error);
@@ -237,7 +262,7 @@ export function startMonitor() {
   void (async () => {
     try {
       const store = await readStore();
-      const anchor = heroProbeMs(store) ?? freshestProbeMs(store);
+      const anchor = heroProbeMs(store);
       const delay =
         anchor != null
           ? Math.max(0, anchor + CHECK_INTERVAL_MS - Date.now())
@@ -272,7 +297,8 @@ function kickProbeIfOverdue(store: Awaited<ReturnType<typeof readStore>>) {
   const state = monitorState();
   if (state.running) return;
 
-  const anchor = heroProbeMs(store) ?? freshestProbeMs(store);
+  // Use full-cycle hero clock only — partial probes must not suppress overdue kicks.
+  const anchor = heroProbeMs(store);
   const overdue =
     anchor == null || Date.now() - anchor >= CHECK_INTERVAL_MS;
 
@@ -284,13 +310,16 @@ function kickProbeIfOverdue(store: Awaited<ReturnType<typeof readStore>>) {
 }
 
 function withLiveClock(payload: PublicStatusPayload): PublicStatusPayload {
+  const state = monitorState();
   const lastMs = payload.lastCheckAt
     ? new Date(payload.lastCheckAt).getTime()
     : null;
   const nextCheckInMs =
     lastMs != null
       ? Math.max(0, lastMs + payload.checkIntervalMs - Date.now())
-      : 0;
+      : state.nextCheckAt != null
+        ? Math.max(0, state.nextCheckAt - Date.now())
+        : 0;
 
   return {
     ...payload,
@@ -305,6 +334,7 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
     return withLiveClock(statusCache.payload);
   }
 
+  const gen = statusCacheGen;
   const store = await readStore();
   kickProbeIfOverdue(store);
 
@@ -329,13 +359,13 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
 
   const heroMs = heroProbeMs(store);
   const lastCheckAt = heroMs ? new Date(heroMs).toISOString() : null;
+  const state = monitorState();
   const nextCheckInMs =
     heroMs != null
       ? Math.max(0, heroMs + CHECK_INTERVAL_MS - Date.now())
-      : 0;
-
-  const state = monitorState();
-  state.nextCheckAt = Date.now() + nextCheckInMs;
+      : state.nextCheckAt != null
+        ? Math.max(0, state.nextCheckAt - Date.now())
+        : 0;
 
   const { current: maintenances, history: maintenanceHistory } =
     toPublicMaintenances(store);
@@ -369,8 +399,11 @@ export async function getPublicStatus(): Promise<PublicStatusPayload> {
     checkIntervalMs: CHECK_INTERVAL_MS,
   };
 
-  statusCache = { at: Date.now(), payload };
-  return payload;
+  // Generation guard: do not re-publish a payload built before an invalidate.
+  if (gen === statusCacheGen) {
+    statusCache = { at: Date.now(), payload, gen };
+  }
+  return withLiveClock(payload);
 }
 
 export function overallStatus(statuses: ServiceHealth[]): ServiceHealth {
@@ -436,11 +469,27 @@ function toPublicService(
   const latest = latestRaw
     ? { ...latestRaw, error: sanitizeProbeError(latestRaw.error) }
     : null;
-  const displayStatus: ServiceHealth = !service.enabled
+
+  const openIncident = store.incidents.find(
+    (i) =>
+      !i.resolvedAt &&
+      (i.serviceId === service.id || i.serviceIds.includes(service.id)),
+  );
+
+  let displayStatus: ServiceHealth = !service.enabled
     ? "unknown"
     : underMaintenance
       ? "maintenance"
       : (latest?.status ?? "unknown");
+
+  if (
+    service.enabled &&
+    !underMaintenance &&
+    openIncident &&
+    (openIncident.status === "degraded" || openIncident.status === "down")
+  ) {
+    displayStatus = worseStatus(displayStatus, openIncident.status);
+  }
 
   return {
     id: service.id,

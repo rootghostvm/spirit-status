@@ -10,7 +10,10 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const store = await readStore();
-  return NextResponse.json({ announcement: store.announcement });
+  return NextResponse.json(
+    { announcement: store.announcement },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 export async function PUT(request: Request) {
@@ -30,10 +33,16 @@ export async function PUT(request: Request) {
   }
 
   try {
-    // Explicit clear, or empty message treated as clear.
-    if (body.clear || !body.message?.trim()) {
+    if (body.clear) {
       await setAnnouncement(null);
       return NextResponse.json({ announcement: null });
+    }
+
+    if (!body.message?.trim()) {
+      return NextResponse.json(
+        { error: "Message is required (or use Delete)" },
+        { status: 400 },
+      );
     }
 
     const announcement = await setAnnouncement({

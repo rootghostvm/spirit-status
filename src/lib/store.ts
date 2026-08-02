@@ -345,27 +345,47 @@ export async function updateStore(
 ): Promise<StoreData> {
   return enqueue(async () => {
     const store = await ensureStore();
-    await mutator(store);
+    const snapshot = JSON.parse(JSON.stringify(store)) as StoreData;
+
+    const invalidate = async () => {
+      try {
+        const { invalidateStatusCache } = await import("./checker");
+        invalidateStatusCache();
+      } catch {
+        // ignore circular-init edge during boot
+      }
+    };
+
+    try {
+      await mutator(store);
+    } catch (error) {
+      memoryStore = normalizeStore(
+        snapshot as Partial<StoreData> & Record<string, unknown>,
+      );
+      r2Dirty = false;
+      throw error;
+    }
+
     await persist(store);
-    // Durably flush R2 immediately so admin edits survive free-tier freezes.
-    // Throws on failure so API routes return an error instead of a false success.
+    // Invalidate immediately so public status never serves pre-mutation cache.
+    await invalidate();
+
     if (isR2Configured()) {
       try {
         await flushStoreNow();
       } catch (error) {
         console.error("[spirit-status] durable flush failed", error);
-        scheduleR2Flush();
+        memoryStore = normalizeStore(
+          snapshot as Partial<StoreData> & Record<string, unknown>,
+        );
+        r2Dirty = false;
+        await invalidate();
         throw new Error(
-          "Saved in memory but failed to persist to storage. Try again in a moment.",
+          "Could not persist to storage. Changes were not saved — try again.",
         );
       }
     }
-    try {
-      const { invalidateStatusCache } = await import("./checker");
-      invalidateStatusCache();
-    } catch {
-      // ignore circular-init edge during boot
-    }
+
     return store;
   });
 }
@@ -462,9 +482,15 @@ export async function deleteService(id: string) {
         return incident.source === "manual";
       });
 
-    for (const m of store.maintenances) {
-      m.serviceIds = m.serviceIds.filter((sid) => sid !== id);
-    }
+    store.maintenances = store.maintenances
+      .map((m) => {
+        const wasScoped = m.serviceIds.length > 0;
+        const serviceIds = m.serviceIds.filter((sid) => sid !== id);
+        // Scoped window with no remaining targets must not become "all services".
+        if (wasScoped && serviceIds.length === 0) return null;
+        return { ...m, serviceIds };
+      })
+      .filter((m): m is Maintenance => m != null);
   });
   return removed;
 }
@@ -636,20 +662,19 @@ function bumpDaily(
 function syncIncidents(
   store: StoreData,
   service: Service,
-  previous: CheckResult | undefined,
+  _previous: CheckResult | undefined,
   next: CheckResult,
 ): WebhookEvent[] {
   const events: WebhookEvent[] = [];
-  const wasBad =
-    previous?.status === "degraded" || previous?.status === "down";
   const isBad = next.status === "degraded" || next.status === "down";
-  const open = store.incidents.find(
-    (i) =>
-      !i.resolvedAt &&
-      (i.serviceId === service.id || i.serviceIds.includes(service.id)),
+  const covers = (i: Incident) =>
+    i.serviceId === service.id || i.serviceIds.includes(service.id);
+  const openAuto = store.incidents.find(
+    (i) => !i.resolvedAt && i.source === "auto" && covers(i),
   );
+  const openAny = store.incidents.find((i) => !i.resolvedAt && covers(i));
 
-  if (isBad && !open) {
+  if (isBad && !openAny) {
     const badStatus = next.status as "degraded" | "down";
     const message =
       next.error ||
@@ -685,29 +710,35 @@ function syncIncidents(
         group: service.group,
       }),
     );
-  } else if (isBad && open && open.source === "auto") {
-    const prevStatus = open.status;
-    if (open.status !== next.status) {
-      open.status = next.status as "degraded" | "down";
+  } else if (isBad && openAuto) {
+    const prevStatus = openAuto.status;
+    if (openAuto.status !== next.status) {
+      openAuto.status = next.status as "degraded" | "down";
+      openAuto.updates.push({
+        id: randomUUID(),
+        at: next.checkedAt,
+        status: "update",
+        message: `${service.name} is now ${next.status}`,
+      });
     }
-    open.message =
+    openAuto.message =
       next.error ||
       (next.statusCode
         ? `HTTP ${next.statusCode}`
         : `${service.name} is ${next.status}`);
-    if (prevStatus !== open.status) {
+    if (prevStatus !== openAuto.status) {
       events.push(
         incidentUpdatedEvent({
           serviceName: service.name,
-          status: open.status,
-          message: open.message,
+          status: openAuto.status,
+          message: openAuto.message,
           previousStatus: prevStatus,
         }),
       );
     }
-  } else if (wasBad && !isBad && open && open.source === "auto") {
-    open.resolvedAt = next.checkedAt;
-    open.updates.push({
+  } else if (!isBad && openAuto) {
+    openAuto.resolvedAt = next.checkedAt;
+    openAuto.updates.push({
       id: randomUUID(),
       at: next.checkedAt,
       status: "resolved",
@@ -717,7 +748,7 @@ function syncIncidents(
       incidentResolvedEvent({
         serviceName: service.name,
         message: `${service.name} is operational again.`,
-        startedAt: open.startedAt,
+        startedAt: openAuto.startedAt,
         resolvedAt: next.checkedAt,
       }),
     );

@@ -229,7 +229,8 @@ export function AdminApp() {
     window.setTimeout(() => setToast(null), 2400);
   }, []);
 
-  const loadServices = useCallback(async () => {
+  const loadServices = useCallback(async (opts?: { syncForms?: boolean }) => {
+    const syncForms = opts?.syncForms !== false;
     const res = await fetch("/api/admin/services", { cache: "no-store" });
     if (!res.ok) throw new Error("unauthorized");
     const json = (await res.json()) as {
@@ -256,7 +257,7 @@ export function AdminApp() {
     setMaintenances(json.maintenances ?? []);
     setAnnouncement(json.announcement ?? null);
     setLastCheckAt(json.lastCheckAt);
-    if (json.webhook) {
+    if (syncForms && json.webhook) {
       setWebhookHasUrl(json.webhook.hasUrl);
       setWebhookForm({
         enabled: json.webhook.enabled,
@@ -264,14 +265,16 @@ export function AdminApp() {
         events: { ...emptyWebhookForm.events, ...json.webhook.events },
       });
     }
-    if (json.announcement) {
-      setAnnouncementForm({
-        enabled: json.announcement.enabled,
-        message: json.announcement.message,
-        tone: json.announcement.tone,
-      });
-    } else {
-      setAnnouncementForm(emptyAnnouncementForm);
+    if (syncForms) {
+      if (json.announcement) {
+        setAnnouncementForm({
+          enabled: json.announcement.enabled,
+          message: json.announcement.message,
+          tone: json.announcement.tone,
+        });
+      } else {
+        setAnnouncementForm(emptyAnnouncementForm);
+      }
     }
   }, []);
 
@@ -300,7 +303,8 @@ export function AdminApp() {
   useEffect(() => {
     if (!authed) return;
     const id = window.setInterval(() => {
-      void loadServices().catch(() => undefined);
+      // Poll list data only — never stomp in-progress forms.
+      void loadServices({ syncForms: false }).catch(() => undefined);
     }, 15_000);
     return () => window.clearInterval(id);
   }, [authed, loadServices]);
@@ -671,9 +675,11 @@ export function AdminApp() {
         enabled: webhookForm.enabled,
         events: webhookForm.events,
       };
-      if (!webhookForm.url.trim()) {
-        payload.clearUrl = true;
-      } else if (!webhookForm.url.includes("********")) {
+      // Empty / masked URL keeps the existing secret — never wipe on focus/clear accident.
+      if (
+        webhookForm.url.trim() &&
+        !webhookForm.url.includes("********")
+      ) {
         payload.url = webhookForm.url.trim();
       }
       const res = await fetch("/api/admin/webhook", {
@@ -688,6 +694,34 @@ export function AdminApp() {
       }
       await loadServices();
       showToast("Webhook settings saved");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearWebhookUrl() {
+    if (!window.confirm("Remove the Discord webhook URL?")) return;
+    setBusy(true);
+    setWebhookError(null);
+    try {
+      const res = await fetch("/api/admin/webhook", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: webhookForm.enabled,
+          events: webhookForm.events,
+          clearUrl: true,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setWebhookError(json.error ?? "Could not clear webhook");
+        return;
+      }
+      setWebhookForm((f) => ({ ...f, url: "" }));
+      setWebhookHasUrl(false);
+      await loadServices();
+      showToast("Webhook URL removed");
     } finally {
       setBusy(false);
     }
@@ -889,12 +923,23 @@ export function AdminApp() {
     setBusy(true);
     try {
       const res = await fetch("/api/admin/check", { method: "POST" });
-      const json = (await res.json()) as { check?: { ran: boolean } };
-      await loadServices();
+      const json = (await res.json().catch(() => ({}))) as {
+        check?: { ran: boolean; checked?: number };
+        error?: string;
+      };
+      await loadServices({ syncForms: false });
+      if (!res.ok) {
+        showToast(json.error ?? "Check failed");
+        return;
+      }
       if (json.check?.ran) {
-        showToast("Checks completed");
+        showToast(
+          json.check.checked
+            ? `Checked ${json.check.checked} service(s)`
+            : "Checks completed",
+        );
       } else {
-        showToast("Check already running");
+        showToast("Check did not run — try again");
       }
     } finally {
       setBusy(false);
@@ -2166,17 +2211,16 @@ export function AdminApp() {
                                   url: e.target.value,
                                 }))
                               }
-                              onFocus={() => {
-                                if (webhookForm.url.includes("********")) {
-                                  setWebhookForm((f) => ({ ...f, url: "" }));
-                                }
-                              }}
-                              placeholder="https://discord.com/api/webhooks/…"
+                              placeholder={
+                                webhookHasUrl
+                                  ? "Leave unchanged, or paste a new webhook URL"
+                                  : "https://discord.com/api/webhooks/…"
+                              }
                             />
                             <span className="field-hint">
-                              Paste a channel webhook from Discord Server
-                              Settings → Integrations. Leave blank and save to
-                              clear.
+                              Paste a Discord channel webhook. Saving with the
+                              masked value keeps the current URL — use Remove
+                              URL to delete it.
                             </span>
                           </label>
 
@@ -2233,6 +2277,16 @@ export function AdminApp() {
                           >
                             Send test
                           </button>
+                          {webhookHasUrl ? (
+                            <button
+                              type="button"
+                              className="ghost-btn danger-btn"
+                              onClick={clearWebhookUrl}
+                              disabled={busy}
+                            >
+                              Remove URL
+                            </button>
+                          ) : null}
                         </div>
                       </form>
                     </aside>

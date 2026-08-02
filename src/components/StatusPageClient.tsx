@@ -9,12 +9,6 @@ import { ServiceList } from "./ServiceList";
 import { MaintenanceFeed } from "./MaintenanceFeed";
 import { IncidentFeed } from "./IncidentFeed";
 
-function isNewerIso(next: string | null, prev: string | null) {
-  if (!next) return false;
-  if (!prev) return true;
-  return new Date(next).getTime() >= new Date(prev).getTime();
-}
-
 export function StatusPageClient({
   initial,
 }: {
@@ -24,30 +18,22 @@ export function StatusPageClient({
   const [tick, setTick] = useState(initial.nextCheckInMs);
   const [mounted, setMounted] = useState(false);
   const fetching = useRef(false);
-  const lastCheckRef = useRef(initial.lastCheckAt);
   const dueRefreshLock = useRef(false);
 
   const applyStatus = useCallback((json: PublicStatusPayload) => {
-    const lastCheckAt = isNewerIso(json.lastCheckAt, lastCheckRef.current)
-      ? json.lastCheckAt
-      : lastCheckRef.current;
-    lastCheckRef.current = lastCheckAt;
-
-    const lastMs = lastCheckAt ? new Date(lastCheckAt).getTime() : null;
-    const nextCheckInMs =
-      lastMs != null
-        ? Math.max(0, lastMs + json.checkIntervalMs - Date.now())
-        : json.nextCheckInMs;
-
-    setData({ ...json, lastCheckAt, nextCheckInMs });
-    setTick(nextCheckInMs);
+    // Always trust the server clock — pinning client lastCheckAt caused stale countdowns.
+    setData(json);
+    setTick(json.nextCheckInMs);
   }, []);
 
   const refresh = useCallback(async () => {
     if (fetching.current) return;
     fetching.current = true;
     try {
-      const res = await fetch("/api/status", { cache: "no-store" });
+      const res = await fetch("/api/status", {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
       if (!res.ok) return;
       const json = (await res.json()) as PublicStatusPayload;
       applyStatus(json);
@@ -78,8 +64,17 @@ export function StatusPageClient({
     if (!mounted) return;
     const id = window.setInterval(() => {
       void refresh();
-    }, 10_000);
+    }, 8_000);
     return () => window.clearInterval(id);
+  }, [mounted, refresh]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [mounted, refresh]);
 
   useEffect(() => {

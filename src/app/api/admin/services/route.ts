@@ -15,17 +15,20 @@ export async function GET() {
 
   startMonitor();
   const store = await readStore();
-  return NextResponse.json({
-    services: [...store.services].sort(
-      (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
-    ),
-    latest: store.latest,
-    incidents: store.incidents.slice(0, 40),
-    maintenances: store.maintenances,
-    announcement: store.announcement,
-    webhook: publicWebhookView(store.webhook),
-    lastCheckAt: store.lastCheckAt,
-  });
+  return NextResponse.json(
+    {
+      services: [...store.services].sort(
+        (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
+      ),
+      latest: store.latest,
+      incidents: store.incidents.slice(0, 40),
+      maintenances: store.maintenances,
+      announcement: store.announcement,
+      webhook: publicWebhookView(store.webhook),
+      lastCheckAt: store.lastCheckAt,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 export async function POST(request: Request) {

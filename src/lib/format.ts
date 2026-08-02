@@ -120,6 +120,39 @@ export function assertSafeProbeUrl(raw: string) {
     throw new Error("Private network URLs are not allowed");
   }
 
+  // IPv4-mapped IPv6 (::ffff:127.0.0.1 / ::ffff:7f00:1)
+  const mappedDotted = host.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (mappedDotted) {
+    return assertSafeProbeUrl(
+      `${parsed.protocol}//${mappedDotted[1]}${parsed.pathname}${parsed.search}`,
+    );
+  }
+  const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    const a = (hi >> 8) & 255;
+    const b = hi & 255;
+    const c = (lo >> 8) & 255;
+    const d = lo & 255;
+    return assertSafeProbeUrl(
+      `${parsed.protocol}//${a}.${b}.${c}.${d}${parsed.pathname}${parsed.search}`,
+    );
+  }
+
+  if (host.includes(":")) {
+    const normalized = host.toLowerCase();
+    const blockedV6 =
+      normalized === "::" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      normalized.startsWith("fe80") ||
+      normalized.startsWith("ff");
+    if (blockedV6) {
+      throw new Error("Private network URLs are not allowed");
+    }
+  }
+
   const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (ipv4) {
     const parts = ipv4.slice(1).map(Number);
